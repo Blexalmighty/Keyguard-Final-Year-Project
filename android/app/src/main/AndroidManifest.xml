@@ -1,0 +1,100 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Bluetooth. The legacy pair is bounded to API 30 because Android 12 (API 31)
+        replaced them with BLUETOOTH_SCAN / BLUETOOTH_CONNECT; leaving them
+        unbounded asks every modern user for permissions the app cannot use.
+    -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <!--
+        `neverForLocation` is a promise that this app does not derive the user's
+        position from nearby radios, and it is one we keep: the keyholder reports
+        its own GPS over BLE. It also means Android 12+ users are never asked for
+        location just to find their key. BleService therefore calls startScan with
+        androidUsesFineLocation: false — the two must agree, and previously did
+        not.
+    -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!--
+        Location. Needed for two things, neither of them BLE scanning on modern
+        Android: (1) Android 11 and below gate BLE discovery behind fine location,
+        and (2) Wi-Fi access-point scanning requires it, for Wi-Fi provisioning.
+        Coarse is declared for API 28 and below, where fine alone was not enough
+        for Wi-Fi results.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!--
+        Android 13+ replacement for location-gated Wi-Fi scanning. Also flagged
+        neverForLocation for the same reason as above.
+    -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="tiramisu" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+
+    <!-- Bluetooth Low Energy is required, not optional: without it there is no app. -->
+    <uses-feature android:name="android.hardware.bluetooth_le"
+        android:required="true" />
+
+    <!--
+        usesCleartextTraffic was true, enabling plaintext HTTP app-wide. Nothing
+        here needs it — Firebase speaks HTTPS and the keyholder is reached over
+        BLE — and leaving it on in a project whose whole premise is security
+        invites an easy question in your viva. False means Android itself blocks
+        any accidental plaintext request.
+    -->
+    <application
+        android:label="KeyGuard"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="YOUR_GOOGLE_MAPS_API_KEY_HERE" />
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+        </intent>
+    </queries>
+
+</manifest>

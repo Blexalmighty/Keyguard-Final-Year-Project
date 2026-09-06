@@ -1,0 +1,192 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'services/ble_service.dart';
+import 'services/owner_identity.dart';
+import 'services/pairing_service.dart';
+import 'screens/home_screen.dart';
+import 'screens/scan_screen.dart';
+import 'screens/history_screen.dart';
+import 'screens/settings_screen.dart';
+import 'theme/app_theme.dart';
+import 'widgets/demo_mode_banner.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const KeyGuardProviders(child: KeyGuardApp()));
+}
+
+/// The app's dependency graph, as one widget.
+///
+/// This exists so tests build the *same* tree the app does. It was previously
+/// inlined in `main()`, and the moment a second provider was added every widget
+/// test broke with `ProviderNotFoundException` — the tests were quietly
+/// maintaining their own copy of the graph. Anything that needs the real service
+/// wiring should wrap itself in this.
+class KeyGuardProviders extends StatelessWidget {
+  const KeyGuardProviders({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => BleService()),
+
+        // One instance for the whole app: it caches the owner id so the pairing
+        // handshake does not have to await secure storage inside the
+        // keyholder's 10-second challenge window.
+        Provider<OwnerIdentity>(create: (_) => OwnerIdentity()),
+
+        // Depends on both, so it comes last. `ChangeNotifierProxyProvider`
+        // rather than a plain provider because it must be disposed with the app,
+        // and because it needs the already-constructed BleService rather than
+        // building its own — two BleService instances would fight over the radio.
+        ChangeNotifierProxyProvider2<BleService, OwnerIdentity, PairingService>(
+          create: (context) => PairingService(
+            bleService: context.read<BleService>(),
+            identity: context.read<OwnerIdentity>(),
+          ),
+          // Neither dependency is ever replaced, so there is nothing to update.
+          update: (_, _, _, pairing) => pairing!,
+        ),
+      ],
+      child: child,
+    );
+  }
+}
+
+class KeyGuardApp extends StatelessWidget {
+  const KeyGuardApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final bleService = context.watch<BleService>();
+
+    return MaterialApp(
+      title: 'KeyGuard BLE',
+      debugShowCheckedModeBanner: false,
+      // Both themes are built from AppPalette, so a screen never has to ask
+      // which one is active. The inline `ColorScheme.fromSeed` pair that used to
+      // live here generated its own surface ramp, which is why dark mode came
+      // out with tones nothing in the design system knew about.
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: bleService.darkModeEnabled ? ThemeMode.dark : ThemeMode.light,
+      // Not `Duration.zero`: MaterialApp cross-fades between light and dark over
+      // this window, and because AppPalette is a lerp-able ThemeExtension every
+      // custom surface fades with it rather than snapping a frame later.
+      themeAnimationDuration: AppMotion.slow,
+      themeAnimationCurve: AppMotion.standard,
+      home: const MainNavigation(),
+    );
+  }
+}
+
+class MainNavigation extends StatefulWidget {
+  const MainNavigation({super.key});
+
+  @override
+  State<MainNavigation> createState() => _MainNavigationState();
+}
+
+class _MainNavigationState extends State<MainNavigation> {
+  int _currentIndex = 0;
+
+  final List<Widget> _screens = const [
+    HomeScreen(),
+    ScanScreen(),
+    HistoryScreen(),
+    SettingsScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+
+    return Scaffold(
+      body: Column(
+        children: [
+          // Above the IndexedStack so it is visible on every tab. See
+          // widgets/demo_mode_banner.dart for why it cannot be dismissed.
+          const DemoModeBanner(),
+          Expanded(
+            // IndexedStack keeps all four screens alive, so scroll position and
+            // in-flight animations survive tab switches. The cross-fade is
+            // applied around it rather than to a rebuilt subtree, which is why
+            // switching tabs does not restart each screen's entrance animation.
+            child: AnimatedSwitcher(
+              duration: AppMotion.fast,
+              switchInCurve: AppMotion.enter,
+              switchOutCurve: AppMotion.exit,
+              layoutBuilder: (current, previous) => Stack(
+                children: [...previous, ?current],
+              ),
+              child: KeyedSubtree(
+                key: ValueKey<int>(_currentIndex),
+                child: IndexedStack(
+                  index: _currentIndex,
+                  children: _screens,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+      // Everything this used to set by hand — background colour, height, label
+      // behaviour, indicator, icon and label colours — now comes from
+      // `navigationBarTheme` in AppTheme, so it is correct in both brightnesses
+      // without a `isDark ? … : …` here.
+      bottomNavigationBar: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: palette.border)),
+        ),
+        child: SafeArea(
+          // `Align` with an explicit `heightFactor`, NOT `Center`.
+          //
+          // Scaffold hands its bottom bar loose constraints — maxHeight is the
+          // whole screen — and `Center` takes every pixel it is offered. That
+          // gave the nav bar the full screen height, parked it in the vertical
+          // middle, and left the body with zero height: four blank tabs with a
+          // floating tab strip. `heightFactor: 1.0` sizes the height to the
+          // child while still stretching the width, which is all the centring
+          // was ever for.
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            heightFactor: 1.0,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: NavigationBar(
+                selectedIndex: _currentIndex,
+                onDestinationSelected: (i) =>
+                    setState(() => _currentIndex = i),
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.home_outlined),
+                    selectedIcon: Icon(Icons.home_rounded),
+                    label: 'Home',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.radar_outlined),
+                    selectedIcon: Icon(Icons.radar_rounded),
+                    label: 'Scan',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.history_outlined),
+                    selectedIcon: Icon(Icons.history_rounded),
+                    label: 'History',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.settings_outlined),
+                    selectedIcon: Icon(Icons.settings_rounded),
+                    label: 'Settings',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
