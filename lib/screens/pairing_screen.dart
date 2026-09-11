@@ -8,6 +8,7 @@ import '../theme/app_theme.dart';
 import '../widgets/motion.dart';
 import '../widgets/ownership_badge.dart';
 import '../widgets/passkey_entry_sheet.dart';
+import '../widgets/section_label.dart';
 
 /// The claim flow: an unowned keyholder becomes *yours*, and nobody else's.
 ///
@@ -202,13 +203,13 @@ class PairingScreen extends StatelessWidget {
 
       case PairingStage.idle:
         return _Step(
-          title: 'Waiting for the keyholder',
-          detail: 'Connected. Waiting for the device to say whether it has an '
-              'owner. If nothing happens within a few seconds, the firmware may '
-              'be an older build without the ownership handshake.',
-          icon: Icons.more_horiz_rounded,
-          fg: p.muted,
-          bg: p.surfaceHigh,
+          title: 'Connected',
+          detail: 'Checking whether this keyholder already has an owner. If it '
+              'is an older build without the ownership handshake, it simply '
+              'shows as connected with no owner.',
+          icon: Icons.link_rounded,
+          fg: p.primary,
+          bg: p.primarySoft,
           busy: true,
         );
     }
@@ -230,11 +231,11 @@ class _DeviceHeader extends StatelessWidget {
     final p = AppPalette.of(context);
 
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: AppDecorations.card(
-        p,
-        borderColor: p.primary.withValues(alpha: 0.3),
-      ),
+      padding: const EdgeInsets.fromLTRB(13, 16, 16, 16),
+      // The same indigo left edge the scan list uses for a keyholder, so arriving
+      // here from a tap on that card feels like the card expanded rather than
+      // like a different screen opened.
+      decoration: AppDecorations.accented(p, p.primary),
       child: Row(
         children: [
           Container(
@@ -251,8 +252,14 @@ class _DeviceHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(device.name,
-                    style: AppTypography.headlineMd(color: p.onSurface)),
+                Text(
+                  // displayNameFor, not device.name: a claimed keyholder
+                  // advertises the generic "KeyGuard", so the name on this
+                  // header should be *this phone's* name for it when there is
+                  // one (see SettingsStore.nicknameFor).
+                  bleService.displayNameFor(device.id, advertised: device.name),
+                  style: AppTypography.headlineMd(color: p.onSurface),
+                ),
                 const SizedBox(height: 3),
                 Text(device.id,
                     style: AppTypography.metadataMono(color: p.muted)),
@@ -473,13 +480,10 @@ class _Explainer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final p = AppPalette.of(context);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('HOW THE LOCK WORKS',
-            style: AppTypography.labelCaps(color: p.muted)),
+        const SectionLabel('HOW THE LOCK WORKS'),
         const SizedBox(height: 10),
         const _Bullet(
           icon: Icons.touch_app_rounded,

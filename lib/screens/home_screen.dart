@@ -4,10 +4,12 @@ import 'package:provider/provider.dart';
 import '../models/ble_device.dart';
 import '../services/ble_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_logo_tile.dart';
 import '../widgets/battery_pill.dart';
 import '../widgets/map_painter.dart';
 import '../widgets/motion.dart';
 import '../widgets/ownership_badge.dart';
+import '../widgets/section_label.dart';
 import '../widgets/signal_bar.dart';
 
 /// The screen the user actually lives on: is my keyholder near, and where was it
@@ -156,19 +158,9 @@ class _AppBar extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 30,
-                    height: 30,
-                    decoration: BoxDecoration(
-                      color: p.primarySoft,
-                      borderRadius: BorderRadius.circular(9),
-                    ),
-                    child:
-                        Icon(Icons.vpn_key_rounded, size: 17, color: p.primary),
-                  ),
-                  const SizedBox(width: 9),
-                  Text('KeyGuard',
-                      style: AppTypography.headlineLg(color: p.onSurface)),
+                  const AppLogoTile(),
+                  const SizedBox(width: 10),
+                  const AppWordmark('KeyGuard'),
                 ],
               ),
               BatteryPill(
@@ -210,13 +202,12 @@ class _ConnectionCard extends StatelessWidget {
     return AnimatedContainer(
       duration: AppMotion.normal,
       curve: AppMotion.standard,
-      padding: const EdgeInsets.all(16),
-      decoration: AppDecorations.card(
-        p,
-        borderColor: connected
-            ? p.success.withValues(alpha: 0.3)
-            : p.border,
-      ),
+      padding: const EdgeInsets.fromLTRB(14, 16, 16, 16),
+      // A coloured left edge rather than a coloured card. Filling the whole
+      // surface with green on connect would out-shout the hero panel below it and
+      // make an ordinary state look like an alarm; an edge says the same thing at
+      // the right volume, and it moves with the state.
+      decoration: AppDecorations.accented(p, accent),
       child: Row(
         children: [
           AnimatedContainer(
@@ -224,8 +215,9 @@ class _ConnectionCard extends StatelessWidget {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: connected ? p.successSoft : p.surfaceHigh,
+              color: accent.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(13),
+              border: Border.all(color: accent.withValues(alpha: 0.24)),
             ),
             child: Center(
               child: PulseDot(
@@ -255,13 +247,33 @@ class _ConnectionCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 1),
-                Text(
-                  // Deliberately does not name a transport. It used to read
-                  // "ACTIVE / OFFLINE", which is the same information without
-                  // implying a radio the user might try to switch.
-                  bleService.deviceName.toUpperCase(),
-                  style: AppTypography.microLabel(color: p.muted),
-                  overflow: TextOverflow.ellipsis,
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        bleService.displayName.toUpperCase(),
+                        style: AppTypography.microLabel(color: p.muted),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    // Rename lives here, next to the name it changes, and only
+                    // while connected — a nickname is per-keyholder, and with no
+                    // link there is no keyholder to name. The name is stored on
+                    // the phone for the anti-stalking reason in
+                    // SettingsStore.nicknameFor: a claimed keyholder
+                    // deliberately advertises the generic "KeyGuard", so the
+                    // radio must never carry the owner's label.
+                    if (connected)
+                      GestureDetector(
+                        onTap: () => _promptRename(context, bleService),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          child: Icon(Icons.edit_outlined,
+                              size: 13, color: p.muted),
+                        ),
+                      ),
+                  ],
                 ),
 
                 // The ownership lock, on the screen the user looks at most. An
@@ -278,12 +290,62 @@ class _ConnectionCard extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _promptRename(
+      BuildContext context, BleService bleService) async {
+    final controller =
+        TextEditingController(text: bleService.hasNickname ? bleService.displayName : '');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Rename this keyholder'),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 24,
+            decoration: const InputDecoration(
+              hintText: 'e.g. Keys, backpack, bike lock',
+              labelText: 'Name',
+            ),
+            onSubmitted: (_) => Navigator.pop(dialogContext, true),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (saved == true) {
+      await bleService.setNickname(controller.text.trim());
+    }
+    controller.dispose();
+  }
 }
 
 // =============================================================================
 // Signal
 // =============================================================================
 
+/// The proximity readout, and the app's one large piece of colour.
+///
+/// This is the card that got the gradient rather than the connection card above
+/// it, and the reason is that this one is *always* the same kind of thing. A
+/// coloured panel that sometimes means "good" and sometimes means "offline"
+/// teaches the user nothing; a coloured panel that always means "here is the live
+/// measurement" is legible on the second glance.
+///
+/// Everything on it is drawn in white or a white alpha rather than in palette
+/// colours, because the gradient is fixed in both themes — so the same code is
+/// correct in light and dark mode with no branching.
 class _SignalCard extends StatelessWidget {
   const _SignalCard({required this.bleService});
 
@@ -293,9 +355,15 @@ class _SignalCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
 
+    // Named once, used throughout: the point of a hero panel is that it looks
+    // like one surface, which means one set of tints.
+    const onHero = Colors.white;
+    final onHeroDim = Colors.white.withValues(alpha: 0.62);
+    final onHeroFaint = Colors.white.withValues(alpha: 0.16);
+
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: AppDecorations.card(p),
+      padding: const EdgeInsets.all(18),
+      decoration: AppDecorations.hero(p),
       child: Column(
         children: [
           Row(
@@ -306,14 +374,14 @@ class _SignalCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text('SIGNAL STRENGTH',
-                        style: AppTypography.labelCaps(color: p.muted)),
+                        style: AppTypography.labelCaps(color: onHeroDim)),
                     const SizedBox(height: 5),
                     AppSwap(
                       alignment: Alignment.centerLeft,
                       child: Text(
                         bleService.signalQuality,
                         key: ValueKey<String>(bleService.signalQuality),
-                        style: AppTypography.headlineLg(color: p.primary),
+                        style: AppTypography.headlineLg(color: onHero),
                       ),
                     ),
                   ],
@@ -324,7 +392,7 @@ class _SignalCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text('EST. DISTANCE',
-                      style: AppTypography.labelCaps(color: p.muted)),
+                      style: AppTypography.labelCaps(color: onHeroDim)),
                   const SizedBox(height: 5),
                   // Tabular figures via AppTypography.numeric, so the number does
                   // not shift the row's width as it counts up and down.
@@ -336,27 +404,29 @@ class _SignalCard extends StatelessWidget {
                         Text(
                           bleService.estimatedDistance.toStringAsFixed(1),
                           style: AppTypography.numeric(
-                              color: p.onSurface, fontSize: 26),
+                              color: onHero, fontSize: 30),
                         ),
                         const SizedBox(width: 3),
                         Text('m',
-                            style: AppTypography.bodyMd(color: p.muted)),
+                            style: AppTypography.bodyMd(color: onHeroDim)),
                       ],
                     )
                   else
                     Text('--',
                         style: AppTypography.numeric(
-                            color: p.muted, fontSize: 26)),
+                            color: onHeroDim, fontSize: 30)),
                 ],
               ),
             ],
           ),
           const SizedBox(height: 18),
 
-          SignalBarWidget(barHeights: bleService.rssiBars),
+          // White rather than the teal accent: on violet, teal reads as a muddy
+          // blue and stops being distinguishable from the panel behind it.
+          SignalBarWidget(barHeights: bleService.rssiBars, color: onHero),
           const SizedBox(height: 16),
 
-          Divider(height: 1, color: p.border),
+          Container(height: 1, color: onHeroFaint),
           const SizedBox(height: 12),
 
           Row(
@@ -366,13 +436,13 @@ class _SignalCard extends StatelessWidget {
                 bleService.hasRssiReading
                     ? '${bleService.currentRssi} dBm'
                     : '-- dBm',
-                style: AppTypography.metadataMono(color: p.muted),
+                style: AppTypography.metadataMono(color: onHeroDim),
               ),
               Text(
                 // Was the hardcoded string 'Updated Just Now', which the app
                 // displayed even with no keyholder connected at all.
                 bleService.rssiFreshness,
-                style: AppTypography.metadataMono(color: p.muted),
+                style: AppTypography.metadataMono(color: onHeroDim),
               ),
             ],
           ),
@@ -407,8 +477,7 @@ class _LocationCard extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('LAST KNOWN LOCATION',
-                      style: AppTypography.labelCaps(color: p.muted)),
+                  const SectionLabel('LAST KNOWN LOCATION'),
                   AnimatedRotation(
                     turns: bleService.hasGpsFix ? 0 : 0.5,
                     duration: AppMotion.slow,
@@ -417,7 +486,9 @@ class _LocationCard extends StatelessWidget {
                           ? Icons.location_on_rounded
                           : Icons.gps_not_fixed_rounded,
                       size: 18,
-                      color: bleService.hasGpsFix ? p.primary : p.muted,
+                      // Teal, not indigo: a satellite fix is a live measurement,
+                      // which is what the accent hue is reserved for.
+                      color: bleService.hasGpsFix ? p.accent : p.muted,
                     ),
                   ),
                 ],
@@ -474,7 +545,10 @@ class _LocationCard extends StatelessWidget {
                     bleService.hasGpsFix
                         ? bleService.coordinatesFormatted
                         : '--',
-                    style: AppTypography.metadataMono(color: p.muted),
+                    // The coordinate pair is measured data, so it takes the accent
+                    // — matching the pin and the crosshair in the diagram above it.
+                    style: AppTypography.metadataMono(
+                        color: bleService.hasGpsFix ? p.accent : p.muted),
                   ),
                 ],
               ),
@@ -529,27 +603,42 @@ class _PingButtonState extends State<_PingButton> {
               child: AnimatedContainer(
                 duration: AppMotion.normal,
                 curve: AppMotion.standard,
-                width: 148,
-                height: 148,
+                width: 152,
+                height: 152,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
+                  // The same two stops as the hero panel, so the primary action
+                  // and the primary readout are visibly the same brand rather
+                  // than two indigos that happen to be near each other.
                   gradient: enabled
                       ? LinearGradient(
                           begin: Alignment.topLeft,
                           end: Alignment.bottomRight,
-                          colors: [
-                            p.primary,
-                            Color.lerp(p.primary, Colors.black, 0.22)!,
-                          ],
+                          colors: [p.gradientFrom, p.gradientTo],
                         )
                       : null,
                   color: enabled ? null : p.surfaceHigh,
+                  border: Border.all(
+                    color: enabled ? p.sheen : p.border,
+                    width: 1.5,
+                  ),
                   boxShadow: enabled
                       ? [
+                          // Two shadows: a tight one that seats the button on the
+                          // page, and a wide coloured bloom that grows while the
+                          // buzzer is sounding. The bloom is the animation — a
+                          // ring that only glows when something is actually
+                          // happening on the hardware.
                           BoxShadow(
-                            color: p.primary.withValues(alpha: 0.4),
-                            blurRadius: pinging ? 34 : 22,
-                            spreadRadius: pinging ? 8 : 2,
+                            color: p.shadow,
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                          BoxShadow(
+                            color: p.gradientTo
+                                .withValues(alpha: pinging ? 0.55 : 0.34),
+                            blurRadius: pinging ? 38 : 24,
+                            spreadRadius: pinging ? 9 : 2,
                             offset: const Offset(0, 8),
                           ),
                         ]
@@ -561,23 +650,27 @@ class _PingButtonState extends State<_PingButton> {
                     Container(
                       padding: const EdgeInsets.all(13),
                       decoration: BoxDecoration(
-                        color: (enabled ? p.onPrimary : p.muted)
+                        color: (enabled ? Colors.white : p.muted)
                             .withValues(alpha: 0.18),
                         shape: BoxShape.circle,
+                        border: Border.all(
+                          color: (enabled ? Colors.white : p.muted)
+                              .withValues(alpha: 0.22),
+                        ),
                       ),
                       child: Icon(
                         pinging
                             ? Icons.graphic_eq_rounded
                             : Icons.volume_up_rounded,
                         size: 32,
-                        color: enabled ? p.onPrimary : p.muted,
+                        color: enabled ? Colors.white : p.muted,
                       ),
                     ),
                     const SizedBox(height: 9),
                     Text(
                       pinging ? 'Ringing…' : 'Ping Key',
                       style: AppTypography.headlineMd(
-                          color: enabled ? p.onPrimary : p.muted),
+                          color: enabled ? Colors.white : p.muted),
                     ),
                   ],
                 ),

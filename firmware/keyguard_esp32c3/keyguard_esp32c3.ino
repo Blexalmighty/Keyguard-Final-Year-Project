@@ -62,13 +62,12 @@
  * for the GPS. With it disabled, the serial console and the GPS fight over the
  * same two pins and you get garbage on both.
  *
- * Libraries: Adafruit_SSD1306, Adafruit_GFX, TinyGPSPlus. BLE, Preferences,
- * WiFi and mbedTLS ship with the ESP32 core.
+ * Libraries: U8g2 (by olikraus), TinyGPSPlus. BLE, Preferences, WiFi and
+ * mbedTLS ship with the ESP32 core.
  * =========================================================================== */
 
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <U8g2lib.h>
 
 #include <BLEDevice.h>
 #include <BLEServer.h>
@@ -100,20 +99,18 @@
 #define I2C_SCL        9
 #define OLED_ADDRESS   0x3C
 
-/* The 0.42" panel is driven by a full SSD1306 but only a 72x40 window of its
- * RAM is wired to visible pixels. Rather than patch the Adafruit library's
- * column addressing, the framebuffer is allocated at the controller's full
- * 128x64 and everything is drawn inside the visible rectangle.
+/* The 0.42" panel is driven by a full SSD1306 controller but only a 72x40 window
+ * of its RAM is wired to visible pixels, and different production batches place
+ * that window differently. U8g2 ships a constructor built for exactly this panel
+ * (U8G2_SSD1306_72X40_ER_F_HW_I2C) with the column offset already baked into its
+ * init sequence, so the drawing area is a plain 72x40 with the origin at the top
+ * left corner of what you can actually see — no offsets to tune.
  *
- * IF THE DISPLAY IS BLANK OR TEXT IS CLIPPED, adjust these two numbers — panels
- * from different batches place the window differently. Common values are
- * (28, 24) and (28, 0). Nothing else in this sketch depends on them. */
-#define OLED_BUFFER_W  128
-#define OLED_BUFFER_H  64
-#define OLED_VISIBLE_W 72
-#define OLED_VISIBLE_H 40
-#define OLED_X_OFFSET  28
-#define OLED_Y_OFFSET  24
+ * This is why U8g2 rather than Adafruit_SSD1306: the Adafruit library has no
+ * concept of a display window, so it needs a 128x64 buffer plus two magic offset
+ * constants that have to be found by trial and error on each panel batch. */
+#define OLED_W 72
+#define OLED_H 40
 
 /* Battery. Two 100k resistors halve the pack voltage, so the true voltage is
  * twice what the ADC sees. A 402030 LiPo is empty near 3.30 V and full at
@@ -154,6 +151,10 @@
 #define CMD_AUTH       "AUTH:"
 #define CMD_UNCLAIM    "UNCLAIM"
 #define CMD_WIFI_SET   "WIFI_SET:"
+/* ALERT_SET:<token> — pick the buzzer cadence. The phone sends a NAME, never
+ * milliseconds, so the numbers below can be retuned without the app agreeing to
+ * anything. Tokens must match AlertPattern.wireName in lib/models/alert_pattern.dart */
+#define CMD_ALERT_SET  "ALERT_SET:"
 
 // Responses to the phone
 #define RSP_READY            "READY"
@@ -171,6 +172,11 @@
 #define RSP_NOT_AUTHED       "ERR_NOT_AUTHED"
 #define RSP_WIFI_OK          "WIFI_OK:"
 #define RSP_WIFI_FAIL        "WIFI_FAIL:"
+/* ALERT:<token> — the cadence this device is ACTUALLY set to. Sent on connect
+ * and after every accepted ALERT_SET, so the app's Settings screen shows the
+ * device's state rather than what some phone last asked for. Those two diverge
+ * as soon as the app is reinstalled, or a second phone is given ownership. */
+#define RSP_ALERT            "ALERT:"
 
 #define OWNER_ID_BYTES   16
 #define OWNER_KEY_BYTES  32
@@ -186,8 +192,6 @@
 #define MAX_AUTH_FAILURES     3
 #define LOCKOUT_MS            30000UL
 #define ALERT_MAX_MS          45000UL   // buzzer gives up rather than draining
-#define ALERT_BEEP_ON_MS      250UL
-#define ALERT_BEEP_OFF_MS     250UL
 #define BATTERY_INTERVAL_MS   30000UL   // per the handout
 #define BUTTON_DEBOUNCE_MS    50UL
 #define FACTORY_RESET_HOLD_MS 10000UL
@@ -197,7 +201,11 @@
  * SECTION 4 — Globals
  * =========================================================================== */
 
-Adafruit_SSD1306 display(OLED_BUFFER_W, OLED_BUFFER_H, &Wire, -1);
+/* Full-buffer ("_F_") mode: the whole 72x40 frame is assembled in RAM and pushed
+ * in one go, so partial redraws never flicker. It costs 360 bytes, which is
+ * nothing next to the BLE stack. */
+U8G2_SSD1306_72X40_ER_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
+bool g_displayPresent = false;
 TinyGPSPlus gps;
 Preferences prefs;
 
@@ -231,15 +239,69 @@ double  g_lastLat = 0.0;
 double  g_lastLng = 0.0;
 bool    g_hasFix  = false;
 
+/* --- Alert cadences ---------------------------------------------------------
+ *
+ * WHY THESE ARE RHYTHMS AND NOT RINGTONES. The buzzer on GPIO 5 is an ACTIVE
+ * element: it contains its own oscillator, so it has exactly one pitch and the
+ * only thing this code controls is whether current is flowing. digitalWrite HIGH
+ * and LOW are the entire instrument. tone() generates a square wave for a
+ * PASSIVE buzzer and does nothing useful here — a mistake already recorded in
+ * the hardware notes as one that cost debugging time.
+ *
+ * So an app menu of "Chime / Bell / Marimba" would be three names for one sound.
+ * What actually differs, and what actually makes a beep findable, is the rhythm:
+ * a long tone is easy to walk towards, a fast triple-beep cuts through
+ * conversation, a slow single pip finds keys without announcing it to a lecture
+ * hall.
+ *
+ * This table is the mirror of the AlertPattern enum in
+ * lib/models/alert_pattern.dart. The tokens must match its wireName values
+ * exactly; the millisecond numbers exist only here, which is the point — retuning
+ * a pattern is a firmware change alone.
+ */
+struct AlertCadence {
+  const char* token;    // wire token, matches AlertPattern.wireName
+  uint32_t    onMs;     // buzzer driven high, per beep
+  uint32_t    gapMs;    // silence BETWEEN beeps of a burst (0 when burst == 1)
+  uint8_t     burst;    // beeps per burst; 1 is a plain on/off cycle
+  uint32_t    pauseMs;  // silence AFTER a completed burst, before it repeats
+  bool        silent;   // LED only — buzzer stays down throughout
+};
+
+static const AlertCadence ALERT_CADENCES[] = {
+  { "CONT",     60000UL,   0UL, 1,    0UL, false },  // unbroken tone
+  { "STEADY",     250UL,   0UL, 1,  250UL, false },  // the default
+  { "TRIPLE",      90UL,  80UL, 3,  700UL, false },  // three quick beeps, pause
+  { "URGENT",      60UL,   0UL, 1,   60UL, false },  // rapid chirping
+  { "DISCREET",    70UL,   0UL, 1, 2000UL, false },  // one pip every two seconds
+  { "SILENT",     400UL,   0UL, 1,  400UL, true  },  // LED flashes, buzzer silent
+};
+static const uint8_t ALERT_CADENCE_COUNT =
+    sizeof(ALERT_CADENCES) / sizeof(ALERT_CADENCES[0]);
+
+/* Index into ALERT_CADENCES. Defaults to STEADY, and is loaded from NVS at boot
+ * so the choice survives a reboot and applies to the low-battery chirp — which
+ * sounds whether or not a phone is anywhere near. */
+uint8_t g_cadenceIndex = 1;
+
 // --- Alert (buzzer + LED) ---
 bool     g_alertActive  = false;
 uint32_t g_alertStarted = 0;
 uint32_t g_alertToggled = 0;
 bool     g_alertOn      = false;
+/* Which beep of the current burst we are on, and whether we are in the long gap
+ * that follows a completed burst. Only TRIPLE uses more than one beep, but the
+ * state machine is written generally so a future pattern needs no new code. */
+uint8_t  g_alertBeep    = 0;
+bool     g_alertInPause = false;
 
 // --- Battery ---
 int      g_batteryPercent = 0;
 uint32_t g_lastBatteryRead = 0;
+/* True once the low-battery warning has sounded, so it sounds once per discharge
+ * rather than every 30 seconds all the way down. Cleared when the pack recovers
+ * above the threshold plus hysteresis. */
+bool     g_batteryWarned = false;
 
 // --- Button ---
 bool     g_buttonDown      = false;
@@ -254,64 +316,108 @@ String g_wifiPass;
 /* ===========================================================================
  * SECTION 5 — Display
  *
- * Keep all panel-specific code in these two functions. If you already have an
- * init sequence that works on your board, replace the bodies of initDisplay()
- * and showOnOLED() and nothing else in this sketch needs to change.
+ * Keep all panel-specific code in this section. Everything else in the sketch
+ * talks to the screen only through showOnOLED() and showPasskey().
  * =========================================================================== */
 
+/* The two fonts used, and why:
+ *
+ *   FONT_SMALL  u8g2_font_6x10_tf   6 px advance -> exactly 12 characters across
+ *                                   the 72 px panel. Keep messages to 12 chars.
+ *   FONT_BIG    u8g2_font_10x20_tf  10 px advance -> a 6-digit passkey is 60 px,
+ *                                   leaving a 6 px margin either side.
+ *
+ * The big font exists only for the passkey. The previous version drew it with a
+ * 2x-scaled 6x8 font, which made six digits exactly 72 px — the full panel width
+ * with no margin at all, and it clipped the "PAIR CODE" label to "PAIR C". */
+#define FONT_SMALL u8g2_font_6x10_tf
+#define FONT_BIG   u8g2_font_10x20_tf
+
 void initDisplay() {
+  /* This Wire.begin() looks redundant next to display.begin() and is not. The
+   * two-argument U8g2 constructor leaves the I2C pins as U8X8_PIN_NONE, so
+   * u8g2's own init calls Wire.begin() with no arguments and picks up the board
+   * variant's defaults — which on the C3 Super Mini are GPIO 8 and 9, the pins
+   * the onboard panel is wired to. Naming them here means the probe below runs
+   * on the right bus, and means a reader can see which pins are in play. */
   Wire.begin(I2C_SDA, I2C_SCL);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
-    // No display is not fatal — the locator still works, it just cannot show a
-    // passkey, so bonding would have to be done from a device that displays it.
+
+  /* Probe before initialising. u8g2's begin() returns success even with no panel
+   * attached — it writes an init sequence and never reads back — so without this
+   * the log would claim a display that is not there. */
+  Wire.beginTransmission(OLED_ADDRESS);
+  if (Wire.endTransmission() != 0) {
+    // Not fatal: the locator still works, it just cannot show a passkey, so
+    // bonding would have to be confirmed from a device that can display one.
     Serial.println("OLED not found at 0x3C");
     return;
   }
-  display.clearDisplay();
-  display.display();
+
+  display.setBusClock(400000);
+  display.begin();
+  display.setFont(FONT_SMALL);
+  display.clearBuffer();
+  display.sendBuffer();
+  g_displayPresent = true;
 }
 
-/* Up to three centred lines inside the visible 72x40 window, per the handout.
- * At text size 1 a character is 6x8 px, so 12 characters fit per line — keep
- * messages short or they will be cut off.
- *
- * Written as overloads rather than with default arguments on purpose. The
- * Arduino IDE auto-generates a prototype for every function in a .ino, and when
- * the definition carries default values the generated prototype carries them
- * too — which C++ rejects as "default argument given for parameter 2". Overloads
- * sidestep that entirely. */
-void showOnOLED(const String& line1, const String& line2, const String& line3,
-                uint8_t textSize) {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(textSize);
-
-  const int charW = 6 * textSize;
-  const int lineH = 8 * textSize;
-  const int count = (line3.length() ? 3 : (line2.length() ? 2 : 1));
-  const int blockH = count * lineH + (count - 1) * 2;
-  int y = OLED_Y_OFFSET + (OLED_VISIBLE_H - blockH) / 2;
+/* Up to three centred lines. Written as overloads rather than with default
+ * arguments on purpose: the Arduino IDE auto-generates a prototype for every
+ * function in a .ino, and when the definition carries default values the
+ * generated prototype carries them too — which C++ rejects as "default argument
+ * given for parameter 2". Overloads sidestep that entirely. */
+void showOnOLED(const String& line1, const String& line2, const String& line3) {
+  if (!g_displayPresent) return;
 
   const String lines[3] = {line1, line2, line3};
+  const int count = (line3.length() ? 3 : (line2.length() ? 2 : 1));
+
+  // 11 px per line: 9 px of glyph plus 2 px of air. Three lines is 33 px, which
+  // leaves 7 px to distribute above and below inside the 40 px panel.
+  const int lineH = 11;
+  const int top   = (OLED_H - count * lineH) / 2;
+
+  display.clearBuffer();
+  display.setFont(FONT_SMALL);
   for (int i = 0; i < count; i++) {
-    const int w = lines[i].length() * charW;
-    int x = OLED_X_OFFSET + (OLED_VISIBLE_W - w) / 2;
-    if (x < OLED_X_OFFSET) x = OLED_X_OFFSET;  // long line: clip, do not wrap
-    display.setCursor(x, y);
-    display.print(lines[i]);
-    y += lineH + 2;
+    const char* s = lines[i].c_str();
+    int x = (OLED_W - (int)display.getStrWidth(s)) / 2;
+    if (x < 0) x = 0;  // over-long line: clip at the left edge, do not wrap
+    // getStrWidth is measured, not assumed, so a proportional font would still
+    // centre correctly if these #defines are ever changed.
+    display.drawStr(x, top + 8 + i * lineH, s);
   }
-  display.display();
+  display.sendBuffer();
 }
 
-void showOnOLED(const String& line1) { showOnOLED(line1, "", "", 1); }
+void showOnOLED(const String& line1) { showOnOLED(line1, "", ""); }
 
 void showOnOLED(const String& line1, const String& line2) {
-  showOnOLED(line1, line2, "", 1);
+  showOnOLED(line1, line2, "");
 }
 
-void showOnOLED(const String& line1, const String& line2, const String& line3) {
-  showOnOLED(line1, line2, line3, 1);
+/* The pairing passkey: a small label above, the digits as large as the panel
+ * allows. Separate from showOnOLED() because it is the one screen where being
+ * readable across a desk matters more than fitting the house style — the owner
+ * has to copy these six digits into Android's system dialog. */
+void showPasskey(const String& digits) {
+  if (!g_displayPresent) return;
+
+  display.clearBuffer();
+
+  display.setFont(FONT_SMALL);
+  const char* label = "PAIR CODE";
+  int lx = (OLED_W - (int)display.getStrWidth(label)) / 2;
+  if (lx < 0) lx = 0;
+  display.drawStr(lx, 10, label);
+
+  display.setFont(FONT_BIG);
+  const char* d = digits.c_str();
+  int dx = (OLED_W - (int)display.getStrWidth(d)) / 2;
+  if (dx < 0) dx = 0;
+  display.drawStr(dx, 34, d);
+
+  display.sendBuffer();
 }
 
 /* The idle screen. Deliberately states ownership: someone holding an unclaimed
@@ -663,6 +769,9 @@ void handleAuth(const String& payload) {
     notifyData(String(RSP_LOC) + String(g_lastLat, 6) + "," + String(g_lastLng, 6));
   }
   notifyData(String(RSP_BAT) + String(g_batteryPercent));
+  // Which cadence this device is set to. Sent here rather than at connect time
+  // because on a claimed device nothing before AUTH_OK is worth saying.
+  notifyCadence();
 }
 
 void handleUnclaim() {
@@ -681,10 +790,71 @@ void handleUnclaim() {
  * SECTION 9 — Alert (the "find my keys" buzzer)
  * =========================================================================== */
 
+const AlertCadence& currentCadence() {
+  // Defensive: an NVS value written by a firmware build with more patterns than
+  // this one would otherwise index off the end of the table.
+  if (g_cadenceIndex >= ALERT_CADENCE_COUNT) g_cadenceIndex = 1;
+  return ALERT_CADENCES[g_cadenceIndex];
+}
+
+/* Tells the phone which cadence is in force. Called on connect and after every
+ * accepted ALERT_SET, because the device — not the app — is the authority here:
+ * the value lives in this chip's NVS. */
+void notifyCadence() {
+  notifyData(String(RSP_ALERT) + currentCadence().token);
+}
+
+/* Look a token up in the table. Returns -1 for anything unrecognised, and the
+ * caller ignores the command rather than guessing — silently applying the wrong
+ * rhythm would be worse than doing nothing. */
+int8_t cadenceIndexForToken(const String& token) {
+  for (uint8_t i = 0; i < ALERT_CADENCE_COUNT; i++) {
+    if (token.equalsIgnoreCase(ALERT_CADENCES[i].token)) return (int8_t)i;
+  }
+  return -1;
+}
+
+void loadCadence() {
+  // prefs.begin() has already been called by loadOwnership().
+  const uint8_t stored = prefs.getUChar("cadence", 1);
+  g_cadenceIndex = (stored < ALERT_CADENCE_COUNT) ? stored : 1;
+  Serial.printf("Alert cadence: %s\n", currentCadence().token);
+}
+
+/* Applies a new cadence and persists it.
+ *
+ * Restarts the alert if one is sounding, so a change made while the buzzer is
+ * going is heard immediately — which is exactly what happens when the app's
+ * preview button is used twice in a row.
+ */
+void setCadence(uint8_t index) {
+  if (index >= ALERT_CADENCE_COUNT) return;
+
+  const bool changed = (index != g_cadenceIndex);
+  g_cadenceIndex = index;
+  if (changed) prefs.putUChar("cadence", index);
+
+  if (g_alertActive) {
+    // Reset the beep state machine but keep the original start time, so choosing
+    // a pattern repeatedly cannot extend the ALERT_MAX_MS budget indefinitely.
+    g_alertToggled = 0;
+    g_alertBeep    = 0;
+    g_alertInPause = false;
+    g_alertOn      = false;
+    digitalWrite(PIN_BUZZER, LOW);
+    digitalWrite(PIN_LED, LOW);
+  }
+
+  Serial.printf("Alert cadence set to %s\n", currentCadence().token);
+  notifyCadence();
+}
+
 void startAlert() {
   g_alertActive  = true;
   g_alertStarted = millis();
   g_alertToggled = 0;
+  g_alertBeep    = 0;
+  g_alertInPause = false;
   g_alertOn      = false;
   showOnOLED("PINGED", "BY PHONE");
 }
@@ -698,26 +868,64 @@ void stopAlert() {
 
 /* Non-blocking so the BLE stack keeps running and a STOP command can land while
  * the buzzer is sounding. A delay()-based beep loop would make the device
- * unresponsive for exactly as long as it was making noise. */
+ * unresponsive for exactly as long as it was making noise.
+ *
+ * The state machine walks: beep, short gap, beep, short gap, ... for `burst`
+ * beeps, then one long `offMs` gap, then repeats. For the common burst == 1 case
+ * that collapses to plain on/off, which is what the old single-interval version
+ * did — this is a generalisation of it, not a replacement of the timing.
+ */
 void serviceAlert() {
   if (!g_alertActive) return;
 
+  const AlertCadence& c = currentCadence();
   const uint32_t now = millis();
 
-  // Give up eventually. A buzzer left running would flatten a 150 mAh cell.
+  // Give up eventually. A buzzer left running would flatten a 700 mAh cell.
   if (now - g_alertStarted > ALERT_MAX_MS) {
     stopAlert();
     return;
   }
 
-  const uint32_t interval = g_alertOn ? ALERT_BEEP_ON_MS : ALERT_BEEP_OFF_MS;
-  if (now - g_alertToggled >= interval) {
-    g_alertToggled = now;
-    g_alertOn = !g_alertOn;
-    // digitalWrite, not tone(): this is an ACTIVE buzzer with its own
-    // oscillator. tone() drives a passive element and does nothing useful here.
-    digitalWrite(PIN_BUZZER, g_alertOn ? HIGH : LOW);
-    digitalWrite(PIN_LED,    g_alertOn ? HIGH : LOW);
+  // A continuous tone has no off phase at all. Special-cased rather than run
+  // through the toggler with a zero interval, which would thrash the GPIO on
+  // every pass through loop().
+  if (c.pauseMs == 0 && c.gapMs == 0) {
+    if (!g_alertOn) {
+      g_alertOn = true;
+      digitalWrite(PIN_BUZZER, c.silent ? LOW : HIGH);
+      digitalWrite(PIN_LED, HIGH);
+    }
+    return;
+  }
+
+  /* How long the current phase lasts. Three phases, not two: an on-beep, the
+   * short gap between beeps of a burst, and the long pause after the burst
+   * completes. Keeping gapMs and pauseMs separate is what makes TRIPLE sound like
+   * three beeps and a rest rather than six evenly spaced ones. */
+  const uint32_t interval =
+      g_alertOn ? c.onMs : (g_alertInPause ? c.pauseMs : c.gapMs);
+
+  if (now - g_alertToggled < interval) return;
+  g_alertToggled = now;
+
+  if (g_alertOn) {
+    // A beep just finished.
+    g_alertOn = false;
+    digitalWrite(PIN_BUZZER, LOW);
+    digitalWrite(PIN_LED, LOW);
+    g_alertBeep++;
+    g_alertInPause = (g_alertBeep >= c.burst);
+    if (g_alertInPause) g_alertBeep = 0;
+  } else {
+    // A gap or pause just finished: start the next beep.
+    g_alertOn = true;
+    g_alertInPause = false;
+    /* SILENT drives the LED and nothing else. Not the same as switching the
+     * alert off — the red LED on GPIO 4 still flashes, so the keyholder is
+     * findable in a dark bag or a quiet room where a buzzer would be rude. */
+    digitalWrite(PIN_BUZZER, c.silent ? LOW : HIGH);
+    digitalWrite(PIN_LED, HIGH);
   }
 }
 
@@ -754,6 +962,7 @@ class ServerCallbacks : public BLEServerCallbacks {
       // claim rather than waiting for a challenge that will never come.
       notifyAuth(RSP_STATUS_UNCLAIMED);
       notifyData(RSP_READY);
+      notifyCadence();
     }
   }
 
@@ -790,7 +999,7 @@ class SecurityCallbacks : public BLESecurityCallbacks {
     snprintf(digits, sizeof(digits), "%06u", (unsigned)(passKey % 1000000));
     // Size 2 gives 12 px per character: six digits is exactly 72 px, the full
     // width of the panel. Any larger and they would not fit.
-    showOnOLED("PAIR CODE", String(digits), "", 2);
+    showPasskey(String(digits));
     Serial.printf("Passkey: %s\n", digits);
   }
 
@@ -846,6 +1055,18 @@ class DataCharCallbacks : public BLECharacteristicCallbacks {
         notifyData(String(RSP_LOC) + "0.000000,0.000000");
       }
       notifyData(String(RSP_BAT) + String(g_batteryPercent));
+    } else if (command.startsWith(CMD_ALERT_SET)) {
+      const String token = command.substring(strlen(CMD_ALERT_SET));
+      const int8_t index = cadenceIndexForToken(token);
+      if (index < 0) {
+        /* An unknown token means the phone is running a newer build than this
+         * firmware. Re-stating what is actually in force is more useful than an
+         * error: the app corrects its own display from this notification. */
+        Serial.printf("Unknown alert token: %s\n", token.c_str());
+        notifyCadence();
+      } else {
+        setCadence((uint8_t)index);
+      }
     }
   }
 };
@@ -1084,6 +1305,25 @@ void readBattery() {
 
   if (percent <= BATTERY_LOW_PERCENT && !g_alertActive) {
     showOnOLED("LOW BATTERY", String(percent) + "%");
+
+    /* Audible warning, using the owner's chosen cadence — which is the reason the
+     * choice is stored on this device rather than only in the app: this fires
+     * with no phone connected, and after a reinstall.
+     *
+     * Once per crossing, not once per reading. The battery is sampled every 30 s,
+     * and a device that beeped every 30 s from 15% down to flat would be
+     * intolerable and would itself waste the remaining charge. It re-arms only
+     * after the pack recovers above the threshold, i.e. after a charge. */
+    if (!g_batteryWarned) {
+      g_batteryWarned = true;
+      const AlertCadence& c = currentCadence();
+      if (!c.silent) chirp(c.burst, (int)min(c.onMs, 200UL));
+      Serial.println("Low battery warning sounded");
+    }
+  } else if (percent > BATTERY_LOW_PERCENT + 5) {
+    // +5 of hysteresis: an ADC reading that jitters across the threshold must not
+    // re-arm the warning and produce a chirp every other sample.
+    g_batteryWarned = false;
   }
 
   /* Charging is deliberately not reported. The TP4056's CHRG and STDBY pads are
@@ -1226,6 +1466,7 @@ void setup() {
   Serial1.begin(9600, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
 
   loadOwnership();
+  loadCadence();   // must follow loadOwnership(), which opens the NVS namespace
   setupBle();
 
   readBattery();

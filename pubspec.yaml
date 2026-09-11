@@ -47,6 +47,29 @@ dependencies:
   # HMAC-SHA256 for the owner challenge-response handshake.
   crypto: ^3.0.5
 
+  # --- Find-My-Phone ringing (the keyholder's button rings the phone) ---------
+  # Plays a chosen audio file on a loop. Configured to use Android's *alarm*
+  # stream, which is what lets the ring be heard when the ringer is on silent —
+  # a phone lost under a cushion is usually a phone on silent.
+  audioplayers: ^6.8.1
+  # Plays the phone's own system ringtone / alarm / notification sound. There is
+  # no way to read the user's default ringtone as a file path, so "use my normal
+  # ringtone" has to go through this rather than through audioplayers.
+  flutter_ringtone_player: ^4.0.0+4
+  # Lets the owner pick an audio file from storage. Uses the system document
+  # picker, so it can reach files this app has no blanket permission to browse.
+  file_picker: ^11.0.3
+  # Continuous vibration alongside the sound. A muffled phone is often found by
+  # feel before it is found by ear.
+  vibration: ^3.2.1
+  # Somewhere permanent to copy a picked ringtone to. The picker hands back a
+  # cache path that Android is free to delete, so the raw path cannot be stored.
+  path_provider: ^2.1.6
+  # The one system notification this app posts: a heads-up when the keyholder
+  # crosses half the alert distance, so the owner is warned while the app is in
+  # their pocket rather than only when they are staring at it.
+  flutter_local_notifications: ^18.0.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

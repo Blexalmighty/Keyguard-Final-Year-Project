@@ -58,10 +58,15 @@ class _FadeSlideInState extends State<FadeSlideIn>
   );
 
   Timer? _timer;
+  bool _hasCompleted = false;
 
   @override
   void initState() {
     super.initState();
+    _startAnimation();
+  }
+
+  void _startAnimation() {
     if (widget.delay == Duration.zero) {
       _controller.forward();
     } else {
@@ -71,6 +76,21 @@ class _FadeSlideInState extends State<FadeSlideIn>
       _timer = Timer(widget.delay, () {
         if (mounted) _controller.forward();
       });
+    }
+    _controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed) _hasCompleted = true;
+    });
+  }
+
+  @override
+  void didUpdateWidget(FadeSlideIn oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If the entrance animation already finished, keep the widget fully visible
+    // rather than re-running it. Continuous BLE scan updates rebuild the device
+    // list every few hundred milliseconds; without this guard, each rebuild
+    // would reset the opacity to 0 and the card would never become visible.
+    if (_hasCompleted && _controller.status != AnimationStatus.completed) {
+      _controller.value = 1.0;
     }
   }
 
@@ -104,6 +124,12 @@ class _FadeSlideInState extends State<FadeSlideIn>
 ///
 /// Capped at [maxStaggered] items: beyond about ten, the last item's delay is
 /// longer than the user's patience, and the effect stops reading as polish.
+///
+/// Each child's key is propagated to the wrapping [FadeSlideIn] so that Flutter
+/// preserves the animation state when the list rebuilds. Without this, a
+/// continuous BLE scan that re-sorts the list by RSSI every few hundred
+/// milliseconds would keep recreating the FadeSlideIn state, resetting the
+/// opacity animation to 0 before it ever reaches 1 — leaving cards invisible.
 List<Widget> staggered(
   List<Widget> children, {
   Duration step = AppMotion.stagger,
@@ -111,6 +137,9 @@ List<Widget> staggered(
 }) {
   return List<Widget>.generate(children.length, (i) {
     return FadeSlideIn(
+      // Lift the child's key to the wrapper so Flutter can match the right
+      // animation state to the right device across list rebuilds.
+      key: children[i].key,
       delay: step * (i < maxStaggered ? i : maxStaggered),
       child: children[i],
     );

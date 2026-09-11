@@ -87,6 +87,12 @@ class AppPalette extends ThemeExtension<AppPalette> {
     required this.primary,
     required this.onPrimary,
     required this.primarySoft,
+    required this.accent,
+    required this.onAccent,
+    required this.accentSoft,
+    required this.gradientFrom,
+    required this.gradientTo,
+    required this.sheen,
     required this.success,
     required this.successSoft,
     required this.danger,
@@ -127,6 +133,34 @@ class AppPalette extends ThemeExtension<AppPalette> {
   /// Tinted brand fill for badges and selected states.
   final Color primarySoft;
 
+  /// The second hue: teal.
+  ///
+  /// One accent, not a set. The app needed more colour than a single indigo could
+  /// carry, but "more colourful" and "looks serious" pull against each other, and
+  /// the way to have both is a small, fixed palette used consistently rather than
+  /// a different hue per screen. Teal sits far enough from indigo to read as a
+  /// distinct signal and far enough from green and amber not to be mistaken for
+  /// success or warning.
+  ///
+  /// Reserved for *live, measured* things — signal strength, distance, the radar
+  /// sweep, an active scan. Indigo stays the colour of identity and actions.
+  final Color accent;
+  final Color onAccent;
+  final Color accentSoft;
+
+  /// The two stops of the hero gradient, indigo into violet.
+  ///
+  /// Adjacent hues, deliberately. A gradient between distant hues (indigo to
+  /// orange, say) is what makes an interface look like a crypto advertisement;
+  /// one that moves a short distance around the wheel reads as depth instead of
+  /// decoration, which is the difference between stylish and unserious.
+  final Color gradientFrom;
+  final Color gradientTo;
+
+  /// A near-white overlay for the top edge of a gradient panel, so it catches
+  /// light rather than sitting flat. Very low alpha — it should be felt, not seen.
+  final Color sheen;
+
   final Color success;
   final Color successSoft;
   final Color danger;
@@ -157,6 +191,12 @@ class AppPalette extends ThemeExtension<AppPalette> {
     primary: Color(0xFF4234B3),
     onPrimary: Color(0xFFFFFFFF),
     primarySoft: Color(0xFFEEEDFE),
+    accent: Color(0xFF00707E),
+    onAccent: Color(0xFFFFFFFF),
+    accentSoft: Color(0xFFDCF3F4),
+    gradientFrom: Color(0xFF382AA6),
+    gradientTo: Color(0xFF6C3BC6),
+    sheen: Color(0x1FFFFFFF),
     success: Color(0xFF00562A),
     successSoft: Color(0xFFE1F5EE),
     danger: Color(0xFFC5301F),
@@ -185,6 +225,16 @@ class AppPalette extends ThemeExtension<AppPalette> {
     primary: Color(0xFFADA2FF),
     onPrimary: Color(0xFF1A1240),
     primarySoft: Color(0xFF241F3D),
+    // Lifted for the same reason as `primary`: the light-mode teal is 3:1 against
+    // #17161F and would fail on 13 px labels.
+    accent: Color(0xFF5AD7D0),
+    onAccent: Color(0xFF00312F),
+    accentSoft: Color(0xFF0F2E31),
+    // Richer than the light stops, not darker. A dark hero that is nearly the
+    // page colour stops being a hero; these read as a lit panel on a dark page.
+    gradientFrom: Color(0xFF2B2472),
+    gradientTo: Color(0xFF54308C),
+    sheen: Color(0x14FFFFFF),
     success: Color(0xFF5FE49A),
     successSoft: Color(0xFF10301F),
     danger: Color(0xFFFF9182),
@@ -210,6 +260,12 @@ class AppPalette extends ThemeExtension<AppPalette> {
     Color? primary,
     Color? onPrimary,
     Color? primarySoft,
+    Color? accent,
+    Color? onAccent,
+    Color? accentSoft,
+    Color? gradientFrom,
+    Color? gradientTo,
+    Color? sheen,
     Color? success,
     Color? successSoft,
     Color? danger,
@@ -233,6 +289,12 @@ class AppPalette extends ThemeExtension<AppPalette> {
       primary: primary ?? this.primary,
       onPrimary: onPrimary ?? this.onPrimary,
       primarySoft: primarySoft ?? this.primarySoft,
+      accent: accent ?? this.accent,
+      onAccent: onAccent ?? this.onAccent,
+      accentSoft: accentSoft ?? this.accentSoft,
+      gradientFrom: gradientFrom ?? this.gradientFrom,
+      gradientTo: gradientTo ?? this.gradientTo,
+      sheen: sheen ?? this.sheen,
       success: success ?? this.success,
       successSoft: successSoft ?? this.successSoft,
       danger: danger ?? this.danger,
@@ -264,6 +326,12 @@ class AppPalette extends ThemeExtension<AppPalette> {
       primary: mix(primary, other.primary),
       onPrimary: mix(onPrimary, other.onPrimary),
       primarySoft: mix(primarySoft, other.primarySoft),
+      accent: mix(accent, other.accent),
+      onAccent: mix(onAccent, other.onAccent),
+      accentSoft: mix(accentSoft, other.accentSoft),
+      gradientFrom: mix(gradientFrom, other.gradientFrom),
+      gradientTo: mix(gradientTo, other.gradientTo),
+      sheen: mix(sheen, other.sheen),
       success: mix(success, other.success),
       successSoft: mix(successSoft, other.successSoft),
       danger: mix(danger, other.danger),
@@ -458,6 +526,89 @@ class AppDecorations {
     );
   }
 
+  /// The indigo-to-violet hero panel: the app's one piece of large colour.
+  ///
+  /// Diagonal rather than vertical. A vertical gradient behind text reads as a
+  /// faded photo; a diagonal one reads as a lit surface, and it means the darkest
+  /// corner sits under the status pill where the contrast is needed.
+  ///
+  /// The shadow is tinted with the gradient's own hue rather than black, which is
+  /// the whole difference between a coloured panel that looks placed on the page
+  /// and one that looks pasted onto it.
+  static BoxDecoration hero(
+    AppPalette palette, {
+    double borderRadius = 22.0,
+    bool elevated = true,
+  }) {
+    return BoxDecoration(
+      borderRadius: BorderRadius.circular(borderRadius),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [palette.gradientFrom, palette.gradientTo],
+      ),
+      border: Border.all(color: palette.sheen),
+      boxShadow: elevated
+          ? [
+              BoxShadow(
+                color: palette.gradientFrom
+                    .withValues(alpha: palette.isDark ? 0.45 : 0.28),
+                blurRadius: 22,
+                offset: const Offset(0, 8),
+              ),
+            ]
+          : null,
+    );
+  }
+
+  /// A filled pill in an arbitrary hue — status chips, counts, small badges.
+  ///
+  /// Separate from [tinted] because that one fills with the tint itself and is
+  /// meant for pale backgrounds; this takes a *strong* colour and softens it, so
+  /// the same call works for success green, danger red or the teal accent.
+  static BoxDecoration pill(
+    Color hue, {
+    double borderRadius = 999.0,
+    double fillOpacity = 0.12,
+    double borderOpacity = 0.30,
+  }) {
+    return BoxDecoration(
+      color: hue.withValues(alpha: fillOpacity),
+      borderRadius: BorderRadius.circular(borderRadius),
+      border: Border.all(color: hue.withValues(alpha: borderOpacity)),
+    );
+  }
+
+  /// A card with one hue-tinted edge, for the "this card is about X" case.
+  ///
+  /// The tint is carried by a coloured left border and a barely-there wash rather
+  /// than by filling the whole card. Filling reads as an alert; an edge reads as a
+  /// category, which is what most of these cards actually are.
+  static BoxDecoration accented(
+    AppPalette palette,
+    Color hue, {
+    double borderRadius = 16.0,
+    double washOpacity = 0.05,
+  }) {
+    return BoxDecoration(
+      color: Color.alphaBlend(hue.withValues(alpha: washOpacity), palette.surface),
+      borderRadius: BorderRadius.circular(borderRadius),
+      border: Border(
+        left: BorderSide(color: hue, width: 3),
+        top: BorderSide(color: palette.border),
+        right: BorderSide(color: palette.border),
+        bottom: BorderSide(color: palette.border),
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: palette.shadow,
+          blurRadius: 14,
+          offset: const Offset(0, 4),
+        ),
+      ],
+    );
+  }
+
   /// Retained so existing call sites keep compiling. New code should use [card].
   static BoxDecoration cardDecoration({
     Color backgroundColor = AppColors.surfaceContainerLowest,
@@ -512,8 +663,14 @@ class AppTheme {
       onPrimary: p.onPrimary,
       primaryContainer: p.primarySoft,
       onPrimaryContainer: isDark ? p.onSurface : AppColors.primary,
-      secondary: p.primary,
-      onSecondary: p.onPrimary,
+      // The accent is registered as Material's `secondary` so that anything drawn
+      // by the framework rather than by this app — a text-selection handle, a
+      // chip, a date picker — picks up the same teal instead of falling back to
+      // an indigo derived from `primary`.
+      secondary: p.accent,
+      onSecondary: p.onAccent,
+      secondaryContainer: p.accentSoft,
+      onSecondaryContainer: p.accent,
       tertiary: p.success,
       onTertiary: isDark ? const Color(0xFF06301A) : Colors.white,
       error: p.danger,

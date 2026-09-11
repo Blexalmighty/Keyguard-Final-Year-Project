@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/ble_service.dart';
+import 'services/notification_service.dart';
 import 'services/owner_identity.dart';
 import 'services/pairing_service.dart';
+import 'services/phone_ringer_service.dart';
 import 'screens/home_screen.dart';
 import 'screens/scan_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
 import 'theme/app_theme.dart';
 import 'widgets/demo_mode_banner.dart';
+import 'widgets/phone_ringing_banner.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,7 +34,30 @@ class KeyGuardProviders extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => BleService()),
+        // Before BleService, because BleService is handed this instance rather
+        // than building its own: the ringer holds the one AudioPlayer and the one
+        // vibration handle, and two of either would fight over stopping.
+        ChangeNotifierProvider(create: (_) => PhoneRingerService()),
+
+        // Not a ChangeNotifier — nothing in the UI rebuilds when a notification
+        // is posted, because the whole point of it is to reach the owner when
+        // the UI is not on screen. `init()` is fired here rather than awaited in
+        // `main()` so a slow platform channel cannot delay first paint; the
+        // service treats "not ready yet" as a no-op.
+        Provider<NotificationService>(
+          create: (_) => NotificationService()..init(),
+        ),
+
+        // `ChangeNotifierProxyProvider` only so `update` can inject the ringer
+        // and the notifier. The BleService instance itself is created once and
+        // never replaced.
+        ChangeNotifierProxyProvider2<PhoneRingerService, NotificationService,
+            BleService>(
+          create: (_) => BleService(),
+          update: (_, ringer, notifications, ble) => ble!
+            ..attachRinger(ringer)
+            ..attachNotifications(notifications),
+        ),
 
         // One instance for the whole app: it caches the owner id so the pairing
         // handshake does not have to await secure storage inside the
@@ -110,6 +136,11 @@ class _MainNavigationState extends State<MainNavigation> {
           // Above the IndexedStack so it is visible on every tab. See
           // widgets/demo_mode_banner.dart for why it cannot be dismissed.
           const DemoModeBanner(),
+
+          // Same reasoning, different urgency: the keyholder's button can be
+          // pressed while the user is on any tab, so the way to silence the
+          // phone has to be reachable from any tab.
+          const PhoneRingingBanner(),
           Expanded(
             // IndexedStack keeps all four screens alive, so scroll position and
             // in-flight animations survive tab switches. The cross-fade is

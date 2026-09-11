@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 import 'map_painter.dart';
+import 'section_label.dart';
 
 /// Bottom sheet showing where a logged event happened.
 class MapModalSheet extends StatelessWidget {
@@ -68,7 +69,7 @@ class MapModalSheet extends StatelessWidget {
 
           Row(
             children: [
-              Icon(Icons.pin_drop_rounded, size: 18, color: p.primary),
+              Icon(Icons.pin_drop_rounded, size: 18, color: p.accent),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(locationTitle,
@@ -96,19 +97,17 @@ class MapModalSheet extends StatelessWidget {
 
           Container(
             padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: p.primarySoft,
-              borderRadius: BorderRadius.circular(12),
-            ),
+            // Teal, matching the pin and crosshair in the diagram directly above
+            // and every other coordinate readout in the app.
+            decoration: AppDecorations.pill(p.accent, borderRadius: 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('COORDINATES',
-                    style: AppTypography.labelCaps(color: p.primary)),
+                SectionLabel('COORDINATES', textColor: p.accent),
                 const SizedBox(height: 4),
                 Text(
                   coordinates,
-                  style: AppTypography.metadataMono(color: p.primary)
+                  style: AppTypography.metadataMono(color: p.accent)
                       .copyWith(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
               ],

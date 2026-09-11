@@ -53,6 +53,10 @@ class BatteryPill extends StatelessWidget {
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(20),
+        // A hairline in the same hue, matching OwnershipBadge. Without it the
+        // pill reads as a flat blob of colour on a card; with it, it reads as a
+        // deliberate chip.
+        border: Border.all(color: fg.withValues(alpha: 0.28)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

@@ -1,0 +1,224 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 860" width="1180" height="860" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <title>KeyGuard — ESP32-C3 Super Mini wiring diagram</title>
+  <desc>Complete point-to-point wiring for the KeyGuard keyholder: onboard OLED, red LED on GPIO 4, active buzzer on GPIO 5, push button on GPIO 7, NEO-6M GPS on GPIO 20/21, battery voltage divider on GPIO 3, TP4056 charger and 700 mAh LiPo cell.</desc>
+
+  <defs>
+    <style>
+      .bg      { fill:#F6F7FB; }
+      .board   { fill:#1F2A44; }
+      .chip    { fill:#2B3A5C; }
+      .pad     { fill:#F0B429; }
+      .padtxt  { font-size:11px; font-weight:700; fill:#1F2A44; }
+      .comp    { fill:#FFFFFF; stroke:#C7CCDA; stroke-width:1.5; }
+      .lbl     { font-size:13px; fill:#1F2A44; font-weight:600; }
+      .sub     { font-size:11px; fill:#66708A; }
+      .mono    { font-size:11px; fill:#1F2A44; font-family:Consolas, "Courier New", monospace; }
+      .monolt  { font-size:11px; fill:#FFFFFF; font-family:Consolas, "Courier New", monospace; font-weight:700; }
+      .wire    { fill:none; stroke-width:2.6; stroke-linecap:round; }
+      .w-gnd   { stroke:#2F3542; }
+      .w-3v3   { stroke:#E03131; }
+      .w-5v    { stroke:#C2255C; }
+      .w-sig   { stroke:#1C7ED6; }
+      .w-gps   { stroke:#0CA678; }
+      .w-adc   { stroke:#7048E8; }
+      .w-i2c   { stroke:#F76707; stroke-dasharray:5 4; }
+      .title   { font-size:22px; font-weight:700; fill:#1F2A44; }
+      .stitle  { font-size:12px; fill:#66708A; }
+      .sect    { font-size:11px; font-weight:700; fill:#8B93A8; letter-spacing:1.2px; }
+      .warn    { font-size:11px; fill:#C2255C; font-weight:600; }
+      .rail    { stroke:#2F3542; stroke-width:3.4; fill:none; }
+    </style>
+    <marker id="dot" markerWidth="7" markerHeight="7" refX="3.5" refY="3.5">
+      <circle cx="3.5" cy="3.5" r="3" fill="#2F3542"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="860"/>
+
+  <text class="title" x="34" y="42">KeyGuard keyholder — wiring diagram</text>
+  <text class="stitle" x="34" y="63">AOICRIE ESP32-C3 Super Mini · 400-hole breadboard · every wire you need, and nothing you don't</text>
+
+  <!-- ================= ESP32-C3 Super Mini ================= -->
+  <g id="mcu">
+    <rect class="board" x="430" y="150" width="230" height="330" rx="10"/>
+    <rect class="chip" x="470" y="240" width="60" height="60" rx="6"/>
+    <text class="monolt" x="500" y="275" text-anchor="middle">C3</text>
+
+    <!-- onboard OLED -->
+    <rect x="556" y="176" width="86" height="52" rx="5" fill="#0B1020" stroke="#3C4A6B" stroke-width="1.5"/>
+    <text x="599" y="198" text-anchor="middle" font-size="10" fill="#7FD1FF" font-family="Consolas, monospace">KeyGuard</text>
+    <text x="599" y="214" text-anchor="middle" font-size="9" fill="#4FA8D8" font-family="Consolas, monospace">72 x 40</text>
+    <text class="sub" x="556" y="243" style="fill:#9AA6C4">onboard OLED</text>
+    <text class="sub" x="556" y="256" style="fill:#9AA6C4">GPIO 8 / 9 — no wires</text>
+
+    <text x="545" y="466" text-anchor="middle" font-size="11" fill="#9AA6C4" font-family="Consolas, monospace">USB-C (flash + debug)</text>
+    <rect x="512" y="470" width="66" height="9" rx="4" fill="#9AA6C4"/>
+
+    <!-- LEFT pads -->
+    <g class="padtxt">
+      <rect class="pad" x="418" y="176" width="34" height="17" rx="3"/><text x="435" y="189" text-anchor="middle">5V</text>
+      <rect class="pad" x="418" y="204" width="34" height="17" rx="3"/><text x="435" y="217" text-anchor="middle">GND</text>
+      <rect class="pad" x="418" y="232" width="34" height="17" rx="3"/><text x="435" y="245" text-anchor="middle">3V3</text>
+      <rect class="pad" x="418" y="288" width="34" height="17" rx="3"/><text x="435" y="301" text-anchor="middle">IO3</text>
+      <rect class="pad" x="418" y="316" width="34" height="17" rx="3"/><text x="435" y="329" text-anchor="middle">IO4</text>
+      <rect class="pad" x="418" y="344" width="34" height="17" rx="3"/><text x="435" y="357" text-anchor="middle">IO5</text>
+      <rect class="pad" x="418" y="372" width="34" height="17" rx="3"/><text x="435" y="385" text-anchor="middle">IO7</text>
+    </g>
+
+    <!-- RIGHT pads -->
+    <g class="padtxt">
+      <rect class="pad" x="638" y="316" width="40" height="17" rx="3"/><text x="658" y="329" text-anchor="middle">IO20</text>
+      <rect class="pad" x="638" y="344" width="40" height="17" rx="3"/><text x="658" y="357" text-anchor="middle">IO21</text>
+    </g>
+
+    <text x="545" y="140" text-anchor="middle" class="lbl">ESP32-C3 Super Mini</text>
+    <text x="545" y="500" text-anchor="middle" class="sub">Board: “ESP32C3 Dev Module” · USB CDC On Boot: Enabled</text>
+  </g>
+
+  <!-- ================= GROUND RAIL ================= -->
+  <path class="rail" d="M60 700 H1120"/>
+  <text class="sect" x="60" y="692">GND RAIL  (breadboard blue row — every GND lands here)</text>
+
+  <!-- ================= 3V3 RAIL ================= -->
+  <path class="rail" d="M240 640 H1010" style="stroke:#E03131"/>
+  <text class="sect" x="240" y="632" style="fill:#E03131">3V3 RAIL  (from ESP32 3V3 pad only — never 5 V)</text>
+
+  <!-- ================= RED LED ================= -->
+  <g id="led">
+    <rect class="comp" x="150" y="296" width="200" height="74" rx="8"/>
+    <text class="lbl" x="164" y="318">Red LED — visual ping</text>
+    <text class="sub" x="164" y="334">anode (long leg) → 220 Ω → IO4</text>
+    <text class="sub" x="164" y="348">cathode (flat side) → GND rail</text>
+    <!-- resistor -->
+    <rect x="300" y="352" width="34" height="12" rx="2" fill="#D9AA6B" stroke="#9C7238"/>
+    <text class="mono" x="317" y="380" text-anchor="middle">220Ω</text>
+  </g>
+  <path class="wire w-sig" d="M418 324 H360 Q350 324 350 336 L350 358 H334"/>
+  <path class="wire w-gnd" d="M150 348 H132 V700"/>
+
+  <!-- ================= BUZZER ================= -->
+  <g id="buzzer">
+    <rect class="comp" x="150" y="404" width="200" height="74" rx="8"/>
+    <circle cx="196" cy="441" r="19" fill="#2F3542"/>
+    <circle cx="196" cy="441" r="4" fill="#8B93A8"/>
+    <text class="lbl" x="226" y="430">Active buzzer 3 V</text>
+    <text class="sub" x="226" y="445">“+” pad → IO5</text>
+    <text class="sub" x="226" y="459">“−” pad → GND rail</text>
+    <text class="warn" x="150" y="494">digitalWrite() only — never tone()</text>
+  </g>
+  <path class="wire w-sig" d="M418 352 H370 Q360 352 360 366 L360 424 H350"/>
+  <path class="wire w-gnd" d="M150 456 H120 V700"/>
+
+  <!-- ================= BUTTON ================= -->
+  <g id="button">
+    <rect class="comp" x="150" y="524" width="200" height="82" rx="8"/>
+    <rect x="168" y="546" width="42" height="42" rx="5" fill="#E9ECF4" stroke="#A9B1C6"/>
+    <circle cx="189" cy="567" r="12" fill="#4C6EF5"/>
+    <text class="lbl" x="222" y="552">Push button 6×6 mm</text>
+    <text class="sub" x="222" y="567">one leg → IO7</text>
+    <text class="sub" x="222" y="581">opposite leg → GND rail</text>
+    <text class="sub" x="150" y="600">INPUT_PULLUP — reads LOW when pressed</text>
+  </g>
+  <path class="wire w-sig" d="M418 380 H380 Q370 380 370 396 L370 545 H350"/>
+  <path class="wire w-gnd" d="M168 588 V700"/>
+
+  <!-- ================= GPS ================= -->
+  <g id="gps">
+    <rect class="comp" x="760" y="150" width="300" height="180" rx="8"/>
+    <text class="lbl" x="776" y="176">NEO-6M GPS  (GY-GPS6MV2)</text>
+    <text class="sub" x="776" y="192">9600 baud · TinyGPSPlus · ceramic patch antenna</text>
+    <g class="padtxt">
+      <rect class="pad" x="760" y="212" width="42" height="17" rx="3"/><text x="781" y="225" text-anchor="middle">VCC</text>
+      <rect class="pad" x="760" y="240" width="42" height="17" rx="3"/><text x="781" y="253" text-anchor="middle">RX</text>
+      <rect class="pad" x="760" y="268" width="42" height="17" rx="3"/><text x="781" y="281" text-anchor="middle">TX</text>
+      <rect class="pad" x="760" y="296" width="42" height="17" rx="3"/><text x="781" y="309" text-anchor="middle">GND</text>
+    </g>
+    <rect x="946" y="204" width="96" height="96" rx="6" fill="#E9ECF4" stroke="#A9B1C6"/>
+    <rect x="962" y="220" width="64" height="64" rx="3" fill="#C99C4A" stroke="#9C7238"/>
+    <text class="sub" x="994" y="296" text-anchor="middle">antenna</text>
+    <text class="sub" x="994" y="318" text-anchor="middle">copper side UP</text>
+  </g>
+  <!-- GPS crossed UART -->
+  <path class="wire w-gps" d="M760 281 H720 Q706 281 706 296 L706 324 H638" marker-end="url(#dot)"/>
+  <path class="wire w-gps" d="M760 253 H736 Q722 253 722 268 L722 352 H638" marker-end="url(#dot)"/>
+  <text class="warn" x="820" y="340">TX → IO20 and RX → IO21: the two data lines cross over.</text>
+  <!-- GPS power -->
+  <path class="wire w-3v3" d="M760 220 H744 Q730 220 730 206 L730 190 H700 V640"/>
+  <path class="wire w-gnd" d="M760 304 H744 Q730 304 730 318 L730 700"/>
+  <!-- 3V3 from board -->
+  <path class="wire w-3v3" d="M418 240 H300 Q288 240 288 254 L288 640"/>
+
+  <!-- ================= BATTERY DIVIDER ================= -->
+  <g id="divider">
+    <rect class="comp" x="760" y="366" width="300" height="230" rx="8"/>
+    <text class="lbl" x="776" y="392">Battery sense divider → IO3</text>
+    <text class="sub" x="776" y="408">two 100 kΩ resistors, 1 : 1 → ratio 2.0</text>
+
+    <!-- schematic: rail on the left, labels to its right -->
+    <line x1="812" y1="424" x2="812" y2="446" stroke="#C2255C" stroke-width="2.4"/>
+    <text class="mono" x="828" y="434" style="fill:#C2255C">LiPo B+ (3.0 – 4.2 V)</text>
+    <rect x="798" y="446" width="28" height="40" rx="3" fill="#D9AA6B" stroke="#9C7238"/>
+    <text class="mono" x="838" y="470">R1  100 kΩ</text>
+    <line x1="812" y1="486" x2="812" y2="508" stroke="#7048E8" stroke-width="2.4"/>
+    <circle cx="812" cy="497" r="4.5" fill="#7048E8"/>
+    <text class="mono" x="838" y="501" style="fill:#7048E8">junction → IO3</text>
+    <rect x="798" y="508" width="28" height="40" rx="3" fill="#D9AA6B" stroke="#9C7238"/>
+    <text class="mono" x="838" y="532">R2  100 kΩ</text>
+    <line x1="812" y1="548" x2="812" y2="570" stroke="#2F3542" stroke-width="2.4"/>
+    <text class="mono" x="838" y="566">→ GND rail</text>
+
+    <text class="mono" x="776" y="586">mV = analogReadMilliVolts(3) × 2.0</text>
+  </g>
+  <path class="wire w-adc" d="M812 497 H700 Q688 497 688 511 L688 610 H400 Q388 610 388 596 L388 296 H418" marker-end="url(#dot)"/>
+  <path class="wire w-gnd" d="M812 570 V700"/>
+
+  <!-- ================= TP4056 + LiPo ================= -->
+  <g id="power">
+    <rect class="comp" x="150" y="150" width="240" height="120" rx="8"/>
+    <text class="lbl" x="164" y="176">TP4056 (HW-373, 6-pad)</text>
+    <text class="sub" x="164" y="192">Type-C in · overcharge / over-discharge /</text>
+    <text class="sub" x="164" y="206">short-circuit protection built in</text>
+    <g class="padtxt">
+      <rect class="pad" x="164" y="220" width="46" height="17" rx="3"/><text x="187" y="233" text-anchor="middle">B+</text>
+      <rect class="pad" x="164" y="244" width="46" height="17" rx="3"/><text x="187" y="257" text-anchor="middle">B−</text>
+      <rect class="pad" x="256" y="220" width="52" height="17" rx="3"/><text x="282" y="233" text-anchor="middle">OUT+</text>
+      <rect class="pad" x="256" y="244" width="52" height="17" rx="3"/><text x="282" y="257" text-anchor="middle">OUT−</text>
+    </g>
+  </g>
+  <g id="lipo">
+    <rect class="comp" x="60" y="86" width="150" height="46" rx="6" style="fill:#E64980;stroke:#A61E4D"/>
+    <text x="135" y="106" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">LiPo 402030</text>
+    <text x="135" y="122" text-anchor="middle" font-size="10" fill="#FFD9E6">3.7 V · 700 mAh</text>
+  </g>
+  <path class="wire w-5v" d="M136 132 V228 H164"/>
+  <path class="wire w-gnd" d="M176 132 V252 H164"/>
+  <text class="mono" x="60" y="150" style="fill:#C2255C">red → B+</text>
+  <text class="mono" x="60" y="166">black → B−</text>
+
+  <!-- TP4056 OUT to ESP 5V -->
+  <path class="wire w-5v" d="M308 228 H340 Q352 228 352 214 L352 184 H418" marker-end="url(#dot)"/>
+  <path class="wire w-gnd" d="M308 252 H332 Q344 252 344 238 L344 212 H418"/>
+  <text class="mono" x="330" y="118" style="fill:#C2255C">OUT+ → 5V pad</text>
+  <text class="sub" x="330" y="134">(not 3V3 — let the onboard</text>
+  <text class="sub" x="330" y="148">regulator do its job)</text>
+
+  <!-- divider tap off B+ -->
+  <path class="wire w-5v" d="M187 228 H196 Q210 228 210 214 L210 76 H1096 Q1108 76 1108 90 L1108 417 H812 V424" marker-end="url(#dot)"/>
+  <text class="mono" x="1000" y="68" fill="#C2255C">B+ tap → R1 (divider top)</text>
+
+  <!-- ================= LEGEND ================= -->
+  <g id="legend" transform="translate(60,742)">
+    <text class="sect" x="0" y="0">WIRE COLOURS</text>
+    <g transform="translate(0,14)">
+      <line class="wire w-5v"  x1="0"   y1="8" x2="30" y2="8"/><text class="sub" x="38"  y="12">battery / 5 V</text>
+      <line class="wire w-3v3" x1="150" y1="8" x2="180" y2="8"/><text class="sub" x="188" y="12">3.3 V</text>
+      <line class="wire w-gnd" x1="270" y1="8" x2="300" y2="8"/><text class="sub" x="308" y="12">ground</text>
+      <line class="wire w-sig" x1="390" y1="8" x2="420" y2="8"/><text class="sub" x="428" y="12">digital I/O</text>
+      <line class="wire w-gps" x1="530" y1="8" x2="560" y2="8"/><text class="sub" x="568" y="12">UART to GPS</text>
+      <line class="wire w-adc" x1="690" y1="8" x2="720" y2="8"/><text class="sub" x="728" y="12">analogue (ADC)</text>
+      <line class="wire w-i2c" x1="880" y1="8" x2="910" y2="8"/><text class="sub" x="918" y="12">I²C (internal, no wiring)</text>
+    </g>
+    <text class="sub" x="0" y="58">Nine wires in total: 3 signal (IO4, IO5, IO7), 2 UART (IO20, IO21), 1 analogue (IO3), 1 divider tap, 3V3 and 5 V feeds, plus every ground to the blue rail.</text>
+    <text class="warn" x="0" y="78">The OLED needs no wiring at all. If you run wires to GPIO 8 and 9 you will short the onboard I²C bus.</text>
+  </g>
+</svg>

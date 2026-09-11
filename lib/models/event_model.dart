@@ -36,6 +36,18 @@ class EventModel {
   /// to the coordinates.
   final String? locationName;
 
+  /// Which keyholder this event was about.
+  ///
+  /// A log of "Connected / Disconnected / Connected" says nothing once a phone
+  /// has met more than one keyholder — and even with one, the owner's own name
+  /// for it ("Ife's keys") is what makes a row readable at a glance. Stored as
+  /// the display name at the time the event happened, so renaming a device later
+  /// does not rewrite history.
+  ///
+  /// Null for events logged before this field existed, which is why every reader
+  /// has to tolerate its absence.
+  final String? deviceName;
+
   EventModel({
     required this.id,
     required this.type,
@@ -44,6 +56,7 @@ class EventModel {
     required this.timestamp,
     this.bleConnected = true,
     this.locationName,
+    this.deviceName,
   });
 
   String get typeString {
@@ -180,6 +193,30 @@ class EventModel {
       type == EventType.ownershipReleased ||
       type == EventType.intruderBlocked;
 
+  /// True when this row can name the keyholder it happened to.
+  bool get hasDeviceName =>
+      deviceName != null && deviceName!.trim().isNotEmpty;
+
+  /// The keyholder's name, phrased for the row it appears under: "from Ife's
+  /// keys" reads better beneath *Disconnected* than a bare name would.
+  String get displaySubject {
+    final name = deviceName?.trim() ?? '';
+    if (name.isEmpty) return '';
+    switch (type) {
+      case EventType.disconnected:
+        return 'from $name';
+      case EventType.connected:
+      case EventType.ownershipClaimed:
+      case EventType.wifiProvisioned:
+        return 'to $name';
+      case EventType.phonePingedKey:
+      case EventType.keyPingedPhone:
+      case EventType.ownershipReleased:
+      case EventType.intruderBlocked:
+        return name;
+    }
+  }
+
   String get formattedTime {
     final hour = timestamp.hour.toString().padLeft(2, '0');
     final minute = timestamp.minute.toString().padLeft(2, '0');
@@ -207,6 +244,7 @@ class EventModel {
         'timestamp': timestamp.toUtc().toIso8601String(),
         'ble_connected': bleConnected,
         if (locationName != null) 'location_name': locationName,
+        if (deviceName != null) 'device_name': deviceName,
       };
 
   factory EventModel.fromJson(Map<String, dynamic> json) => EventModel(
@@ -219,5 +257,6 @@ class EventModel {
                 DateTime.now(),
         bleConnected: json['ble_connected'] == true,
         locationName: json['location_name']?.toString(),
+        deviceName: json['device_name']?.toString(),
       );
 }

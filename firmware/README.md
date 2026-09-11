@@ -20,7 +20,7 @@ from connecting. Only this sketch can.
 | GPS NEO-6M RX | GPIO 21 | Module's **RX** → ESP's **TX** |
 | GPS VCC | 3.3 V | Not 5 V |
 | Battery sense | GPIO 3 | Via two 100 kΩ resistors as a divider from LiPo + |
-| Power | 5 V pin | From TP4056 OUT+, LiPo 402030 3.7 V 150 mAh |
+| Power | 5 V pin | From TP4056 OUT+, LiPo 402030 3.7 V 700 mAh |
 
 The TP4056's `CHRG` and `STDBY` pads are not connected to a GPIO on this build,
 so **the firmware cannot detect charging** and does not claim to. The app's
@@ -52,8 +52,7 @@ garbage, check this setting first.
 
 Install from Library Manager:
 
-- **Adafruit SSD1306** (pulls in Adafruit BusIO)
-- **Adafruit GFX Library**
+- **U8g2** by oliver (olikraus) — the display driver
 - **TinyGPSPlus** by Mikal Hart
 
 `BLEDevice`, `Preferences`, `WiFi` and mbedTLS ship with the ESP32 core — do not
@@ -61,29 +60,40 @@ install separate versions.
 
 ---
 
-## 3. If the display is blank or the text is clipped
+## 3. The display
 
 The 0.42" panel is driven by a full SSD1306 controller, but only a 72×40 window
-of its RAM is wired to visible pixels. Different production batches place that
-window differently, and there is no way to detect it at runtime.
+of its RAM is wired to visible pixels — and different production batches place
+that window differently.
 
-Two constants at the top of the sketch control it and nothing else depends on
-them:
+The sketch uses U8g2's panel-specific constructor, which has the offset baked
+into its initialisation sequence:
 
 ```cpp
-#define OLED_X_OFFSET  28
-#define OLED_Y_OFFSET  24
+U8G2_SSD1306_72X40_ER_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE);
 ```
 
-If the screen stays dark or text appears cut in half, try `OLED_Y_OFFSET 0`
-first, then `OLED_X_OFFSET 30`. All panel-specific code is confined to
-`initDisplay()` and `showOnOLED()` — if you already have an initialisation
-sequence that works on your board, replace the bodies of those two functions and
-nothing else in the sketch needs to change.
+So the drawing area is a plain 72×40 with `(0, 0)` at the top left of what you
+can actually see, and **there are no offsets to tune**. This is the reason for
+U8g2 over Adafruit_SSD1306: the Adafruit library has no concept of a display
+window, so it needs a 128×64 buffer plus two magic offset constants that have to
+be found by trial and error on each batch.
 
-As a last resort, U8g2 ships a constructor built specifically for this panel
-(`U8G2_SSD1306_72X40_ER_F_HW_I2C`) with the offsets already correct. Swapping to
-it means rewriting only those same two functions.
+Two things to know when editing screen text:
+
+- At `u8g2_font_6x10_tf` a character is 6 px wide, so **12 characters fit per
+  line** and three lines fit vertically. Longer strings are clipped at the left
+  edge rather than wrapped.
+- `initDisplay()` probes address `0x3C` with `Wire` before calling
+  `display.begin()`. U8g2's `begin()` reports success even with no panel attached
+  — it writes an init sequence and never reads back — so without the probe the
+  serial log would claim a display that is not there. If the probe fails you get
+  `OLED not found at 0x3C` and `g_displayPresent` stays false; every screen call
+  then returns immediately and the locator carries on working without a screen.
+
+All panel-specific code is confined to **Section 5** of the sketch
+(`initDisplay()`, `showOnOLED()`, `showPasskey()`). Nothing outside it touches
+the display object.
 
 ---
 
@@ -204,9 +214,14 @@ Dropping Upload Speed to 115200 helps on long or unshielded cables.
   the station joins the network; the upload calls are marked `TODO (Phase 4)` in
   `handleWifiSet()` and `serviceButton()`.
 - **Wi-Fi and BLE share one radio** on the C3. Coexistence roughly doubles
-  average current draw, which matters on a 150 mAh cell. Keep Wi-Fi off unless
-  there is something to upload.
-- **Passkey display size.** Six digits at text size 2 is exactly 72 px — the full
-  panel width. It fits, but only just. If it proves unreadable in practice, the
-  fallback is a fixed passkey stored in NVS at claim time; that is a change to
+  average current draw, which on a 700 mAh cell is the difference between about
+  8 hours and about 3–4 hours. Keep Wi-Fi off unless there is something to
+  upload.
+- **Passkey display size.** Resolved, but worth knowing why it is the way it is.
+  Six digits in `u8g2_font_10x20_tf` are 60 px on a 72 px panel, so there is a
+  6 px margin either side and the `PAIR CODE` label sits above it in the small
+  font. The earlier version scaled the small font 2× instead, which made six
+  digits exactly 72 px — the full width, no margin — and clipped the label to
+  `PAIR C`. If the digits still prove hard to read, the fallback is a fixed
+  passkey stored in NVS at claim time: that is a change to
   `SecurityCallbacks::onPassKeyNotify()` plus one `security->setStaticPIN()` call.

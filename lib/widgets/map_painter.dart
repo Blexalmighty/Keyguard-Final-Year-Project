@@ -57,7 +57,10 @@ class _MapPreviewWidgetState extends State<MapPreviewWidget>
                   progress: _pulse.value,
                   grid: p.border,
                   surface: p.surfaceAlt,
-                  accent: p.primary,
+                  // Teal, not indigo. A fix is a measurement, and this app draws
+                  // measurements in the accent — the same hue as the signal bars,
+                  // the distance readout and the radar sweep.
+                  accent: p.accent,
                 ),
               ),
             ),
@@ -70,13 +73,13 @@ class _MapPreviewWidgetState extends State<MapPreviewWidget>
                 height: 15,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: p.primary,
+                  color: p.accent,
                   border: Border.all(color: p.surface, width: 2.5),
                   boxShadow: [
                     BoxShadow(
-                      color: p.shadow,
-                      blurRadius: 6,
-                      offset: const Offset(0, 3),
+                      color: p.accent.withValues(alpha: 0.45),
+                      blurRadius: 10,
+                      offset: const Offset(0, 2),
                     ),
                   ],
                 ),

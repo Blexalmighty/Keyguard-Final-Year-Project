@@ -13,12 +13,21 @@ class SignalBarWidget extends StatelessWidget {
     super.key,
     required this.barHeights,
     this.height = 70,
+    this.color,
   });
 
   /// Percentages (0–100), one per bar.
   final List<double> barHeights;
 
   final double height;
+
+  /// Bar colour. Defaults to the teal accent, which is this app's colour for
+  /// live measured values — the same hue the distance readout and the radar use,
+  /// so a glance at any of the three reads as the same kind of information.
+  ///
+  /// Pass white when drawing on the gradient hero panel, where the accent would
+  /// vanish into the violet.
+  final Color? color;
 
   static const List<double> opacities = [
     0.22, 0.34, 0.46, 0.60, 0.76, 1.0, 0.72, 0.40, //
@@ -27,6 +36,7 @@ class SignalBarWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
+    final hue = color ?? p.accent;
 
     return SizedBox(
       height: height,
@@ -48,7 +58,7 @@ class SignalBarWidget extends StatelessWidget {
                   Container(
                     height: height,
                     decoration: BoxDecoration(
-                      color: p.primary.withValues(alpha: 0.06),
+                      color: hue.withValues(alpha: 0.10),
                       borderRadius:
                           const BorderRadius.vertical(top: Radius.circular(3)),
                     ),
@@ -62,8 +72,8 @@ class SignalBarWidget extends StatelessWidget {
                         begin: Alignment.bottomCenter,
                         end: Alignment.topCenter,
                         colors: [
-                          p.primary.withValues(alpha: opacity),
-                          p.primary.withValues(alpha: opacity * 0.55),
+                          hue.withValues(alpha: opacity),
+                          hue.withValues(alpha: opacity * 0.55),
                         ],
                       ),
                       borderRadius:

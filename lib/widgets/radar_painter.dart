@@ -10,6 +10,12 @@ import '../theme/app_theme.dart';
 /// Colours come from [AppPalette] rather than the raw brand indigo, because the
 /// brand value is too dark to see against the dark theme's background — the
 /// rings were effectively invisible there before.
+///
+/// The dial is split across the app's two hues on purpose. Everything the radio
+/// is *reporting* — rings, sweep, blips — is drawn in the teal accent, the same
+/// colour the signal bars and the distance readout use. The core is an action,
+/// so it wears the indigo→violet action gradient. A user who has seen the home
+/// screen already knows which of the two they are allowed to press.
 class RadarWidget extends StatefulWidget {
   const RadarWidget({
     super.key,
@@ -91,7 +97,7 @@ class _RadarWidgetState extends State<RadarWidget>
                 progress: _rings.value,
                 sweep: _sweep.value,
                 isScanning: widget.isScanning,
-                accent: p.primary,
+                accent: p.accent,
                 deviceCount: widget.deviceCount,
               ),
             ),
@@ -102,8 +108,9 @@ class _RadarWidgetState extends State<RadarWidget>
           _RadarCore(
             isScanning: widget.isScanning,
             onTap: widget.onTap,
-            accent: p.primary,
-            onAccent: p.onPrimary,
+            gradientFrom: p.gradientFrom,
+            gradientTo: p.gradientTo,
+            sheen: p.sheen,
           ),
         ],
       ),
@@ -115,14 +122,19 @@ class _RadarCore extends StatefulWidget {
   const _RadarCore({
     required this.isScanning,
     required this.onTap,
-    required this.accent,
-    required this.onAccent,
+    required this.gradientFrom,
+    required this.gradientTo,
+    required this.sheen,
   });
 
   final bool isScanning;
   final VoidCallback onTap;
-  final Color accent;
-  final Color onAccent;
+  final Color gradientFrom;
+  final Color gradientTo;
+
+  /// A near-white hairline on the top edge, which is what stops a gradient disc
+  /// from looking flat against a dark background.
+  final Color sheen;
 
   @override
   State<_RadarCore> createState() => _RadarCoreState();
@@ -156,20 +168,18 @@ class _RadarCoreState extends State<_RadarCore> {
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [
-                widget.accent,
-                Color.lerp(widget.accent, Colors.black, 0.18)!,
-              ],
+              colors: [widget.gradientFrom, widget.gradientTo],
             ),
+            border: Border.all(color: widget.sheen),
             boxShadow: [
               BoxShadow(
                 // Tied to the scanning state: the glow growing when a scan
                 // starts is the confirmation that the tap registered.
-                color: widget.accent
-                    .withValues(alpha: widget.isScanning ? 0.42 : 0.22),
-                blurRadius: widget.isScanning ? 26 : 14,
-                spreadRadius: widget.isScanning ? 3 : 0,
-                offset: const Offset(0, 4),
+                color: widget.gradientTo
+                    .withValues(alpha: widget.isScanning ? 0.48 : 0.24),
+                blurRadius: widget.isScanning ? 30 : 16,
+                spreadRadius: widget.isScanning ? 4 : 0,
+                offset: const Offset(0, 5),
               ),
             ],
           ),
@@ -182,7 +192,9 @@ class _RadarCoreState extends State<_RadarCore> {
                     : Icons.play_arrow_rounded,
                 key: ValueKey<bool>(widget.isScanning),
                 size: 40,
-                color: widget.onAccent,
+                // Plain white, not `onPrimary`. The gradient stops are fixed
+                // across both themes, so the foreground can be too.
+                color: Colors.white,
               ),
             ),
           ),

@@ -4,9 +4,11 @@ import 'package:provider/provider.dart';
 import '../models/ble_device.dart';
 import '../services/ble_service.dart';
 import '../theme/app_theme.dart';
+import '../widgets/app_logo_tile.dart';
 import '../widgets/motion.dart';
 import '../widgets/ownership_badge.dart';
 import '../widgets/radar_painter.dart';
+import '../widgets/section_label.dart';
 import 'pairing_screen.dart';
 
 /// Device discovery.
@@ -94,7 +96,9 @@ class ScanScreen extends StatelessWidget {
                         else
                           // Keyed by device id so a card that appears mid-scan
                           // animates in on its own rather than the whole list
-                          // re-running its entrance.
+                          // re-running its entrance. The key is propagated by
+                          // staggered() to the FadeSlideIn wrapper, so Flutter
+                          // preserves the animation state across scan rebuilds.
                           ...staggered([
                             for (final device in devices)
                               Padding(
@@ -145,17 +149,24 @@ class ScanScreen extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text('NEARBY DEVICES',
-            style: AppTypography.labelCaps(color: p.onSurfaceVariant)),
+        // The tick goes teal only while the radio is actually sweeping. Accent is
+        // this app's colour for live measurement, so the heading itself reports
+        // whether the list below it is still growing.
+        SectionLabel(
+          'NEARBY DEVICES',
+          color: bleService.isScanning ? p.accent : p.muted,
+          textColor: p.onSurfaceVariant,
+        ),
         AnimatedContainer(
           duration: AppMotion.normal,
           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-          decoration: BoxDecoration(
-            color: p.surfaceHigh,
-            borderRadius: BorderRadius.circular(12),
+          decoration: AppDecorations.pill(
+            bleService.isScanning ? p.accent : p.muted,
+            borderRadius: 12,
           ),
           child: Text('FOUND: $shown',
-              style: AppTypography.metadataMono(color: p.muted)),
+              style: AppTypography.metadataMono(
+                  color: bleService.isScanning ? p.accent : p.muted)),
         ),
       ],
     );
@@ -239,19 +250,9 @@ class _ScanAppBar extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Container(
-                    width: 30,
-                    height: 30,
-                    decoration: BoxDecoration(
-                      color: p.primarySoft,
-                      borderRadius: BorderRadius.circular(9),
-                    ),
-                    child: Icon(Icons.vpn_key_rounded,
-                        size: 17, color: p.primary),
-                  ),
-                  const SizedBox(width: 9),
-                  Text('KeyGuard',
-                      style: AppTypography.headlineLg(color: p.onSurface)),
+                  const AppLogoTile(),
+                  const SizedBox(width: 10),
+                  const AppWordmark('KeyGuard'),
                 ],
               ),
 
@@ -641,20 +642,18 @@ class _DeviceCard extends StatelessWidget {
     // Keyholders get the emphasised treatment. Previously this branch was driven
     // by `isPrimary`, which the service set on an injected phantom card — so the
     // highlight had nothing to do with real hardware.
+    //
+    // The emphasis is a coloured left edge rather than a coloured border all the
+    // way round, matching the connection card on Home: an edge carries the state
+    // at a glance without turning the whole row into a warning label. The hue
+    // *is* the state — green connected, grey locked out, indigo available.
+    final edge = device.isLockedToAnotherOwner
+        ? p.muted
+        : device.isConnected
+            ? p.success
+            : p.primary;
     final decoration = isKeyholder
-        ? AppDecorations.card(
-            p,
-            borderColor: device.isLockedToAnotherOwner
-                ? p.muted.withValues(alpha: 0.35)
-                : p.primary.withValues(alpha: 0.35),
-          ).copyWith(
-            border: Border.all(
-              color: device.isLockedToAnotherOwner
-                  ? p.muted.withValues(alpha: 0.35)
-                  : p.primary.withValues(alpha: 0.35),
-              width: 1.5,
-            ),
-          )
+        ? AppDecorations.accented(p, edge)
         : AppDecorations.card(p, elevated: false);
 
     final shortId = device.macAddress.length > 12
@@ -671,7 +670,7 @@ class _DeviceCard extends StatelessWidget {
       child: AnimatedContainer(
         duration: AppMotion.normal,
         curve: AppMotion.standard,
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(isKeyholder ? 13 : 16, 16, 16, 16),
         decoration: decoration,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -711,24 +710,56 @@ class _DeviceCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      // A device that broadcast no name is shown in italic muted
+                      // type rather than being given an invented one. The name
+                      // is the one thing on this card the user might act on, so
+                      // it has to be visibly a placeholder when it is one.
                       Text(
                         device.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: isKeyholder
                             ? AppTypography.headlineMd(color: p.primary)
-                            : AppTypography.bodyLg(color: p.onSurface),
+                            : AppTypography.bodyLg(
+                                color: device.hasAdvertisedName
+                                    ? p.onSurface
+                                    : p.muted,
+                              ).copyWith(
+                                fontStyle: device.hasAdvertisedName
+                                    ? FontStyle.normal
+                                    : FontStyle.italic,
+                              ),
                       ),
+                      // What the advertisement implied, when it gave no name.
+                      // Separate line, separate weight: this is evidence about
+                      // the device, not its identity.
+                      if (device.hint != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          device.hint!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppTypography.bodyMd(color: p.onSurfaceVariant),
+                        ),
+                      ],
                       const SizedBox(height: 3),
                       Row(
                         children: [
+                          // The dBm figure is a live measurement, so it takes the
+                          // accent; the MAC beside it is an identifier and stays
+                          // muted. Same rule as the home screen's readout.
                           Icon(Icons.signal_cellular_alt_rounded,
-                              size: 12, color: p.muted),
+                              size: 12, color: p.accent),
                           const SizedBox(width: 4),
+                          Text('${device.rssi} dBm',
+                              style: AppTypography.metadataMono(
+                                  color: p.accent)),
                           Expanded(
-                            child: Text(
-                              '${device.rssi} dBm  •  ID: $shortId',
-                              style:
-                                  AppTypography.metadataMono(color: p.muted),
-                            ),
+                            child: Text('  •  $shortId',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppTypography.metadataMono(
+                                    color: p.muted)),
                           ),
                         ],
                       ),

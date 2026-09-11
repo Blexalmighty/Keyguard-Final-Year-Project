@@ -1,5 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/alert_pattern.dart';
+import '../models/phone_alert_tone.dart';
 import 'proximity_model.dart';
 
 /// Persistence for non-secret preferences.
@@ -18,6 +20,11 @@ class SettingsStore {
   final SharedPreferences _prefs;
 
   static const String _kAlertSound = 'alert_sound_enabled';
+  static const String _kAlertPattern = 'alert_pattern';
+  static const String _kPhoneTone = 'phone_alert_tone';
+  static const String _kPhoneTonePath = 'phone_alert_tone_path';
+  static const String _kPhoneToneName = 'phone_alert_tone_name';
+  static const String _kPhoneVibrate = 'phone_alert_vibrate';
   static const String _kSaveGpsOnDisconnect = 'save_gps_on_disconnect';
   static const String _kWifiCloudSync = 'wifi_cloud_sync_enabled';
   static const String _kDarkMode = 'dark_mode_enabled';
@@ -26,6 +33,8 @@ class SettingsStore {
   static const String _kTxPower = 'rssi_tx_power';
   static const String _kPathLoss = 'rssi_path_loss_exponent';
   static const String _kHistory = 'history_events_json';
+  static const String _kNicknamePrefix = 'device_nickname_';
+  static const String _kProximityWarning = 'proximity_warning_enabled';
   static const String _kLastDeviceId = 'last_device_id';
   static const String _kLastDeviceName = 'last_device_name';
 
@@ -36,6 +45,53 @@ class SettingsStore {
 
   bool get alertSoundEnabled => _prefs.getBool(_kAlertSound) ?? true;
   Future<void> setAlertSoundEnabled(bool v) => _prefs.setBool(_kAlertSound, v);
+
+  /// The buzzer cadence, stored as its wire token.
+  ///
+  /// The token rather than the enum index, deliberately: an index would silently
+  /// point at a different pattern if the enum were ever reordered, and this value
+  /// outlives any single build of the app.
+  AlertPattern get alertPattern =>
+      AlertPattern.fromWireName(_prefs.getString(_kAlertPattern));
+  Future<void> setAlertPattern(AlertPattern v) =>
+      _prefs.setString(_kAlertPattern, v.wireName);
+
+  // --- Find My Phone (the keyholder's button rings this phone) ---
+  //
+  // Kept here, not in secure storage: a ringtone choice is not a secret, and a
+  // path to a music file is not key material.
+
+  /// Which sound the phone plays when the keyholder's button is pressed. Stored
+  /// as a token for the same reason as [alertPattern].
+  PhoneAlertTone get phoneAlertTone =>
+      PhoneAlertTone.fromWireName(_prefs.getString(_kPhoneTone));
+  Future<void> setPhoneAlertTone(PhoneAlertTone v) =>
+      _prefs.setString(_kPhoneTone, v.wireName);
+
+  /// Absolute path to the copy of the owner's chosen audio file, inside this
+  /// app's own documents directory. Null until one has been picked.
+  String? get phoneAlertTonePath => _prefs.getString(_kPhoneTonePath);
+
+  /// The picked file's original name, kept only so Settings can show the owner
+  /// what they chose. The stored path is an opaque copy and would read as
+  /// gibberish on screen.
+  String? get phoneAlertToneName => _prefs.getString(_kPhoneToneName);
+
+  Future<void> setPhoneAlertToneFile(String path, String displayName) async {
+    await _prefs.setString(_kPhoneTonePath, path);
+    await _prefs.setString(_kPhoneToneName, displayName);
+  }
+
+  Future<void> clearPhoneAlertToneFile() async {
+    await _prefs.remove(_kPhoneTonePath);
+    await _prefs.remove(_kPhoneToneName);
+  }
+
+  /// Whether to vibrate while ringing. Defaults on: a phone down the side of a
+  /// sofa is often found by feel before it is found by ear.
+  bool get phoneAlertVibrate => _prefs.getBool(_kPhoneVibrate) ?? true;
+  Future<void> setPhoneAlertVibrate(bool v) =>
+      _prefs.setBool(_kPhoneVibrate, v);
 
   bool get saveGpsOnDisconnect => _prefs.getBool(_kSaveGpsOnDisconnect) ?? true;
   Future<void> setSaveGpsOnDisconnect(bool v) =>
@@ -101,4 +157,42 @@ class SettingsStore {
     await _prefs.remove(_kLastDeviceId);
     await _prefs.remove(_kLastDeviceName);
   }
+
+  // --- Device nicknames ---
+  //
+  // A claimed keyholder advertises the generic name "KeyGuard" on purpose: a
+  // per-unit name in the advertising packet lets a passer-by single out *this*
+  // device, and by extension follow its owner around. That is the anti-stalking
+  // property in docs/SECURITY_MODEL.md and it is not negotiable.
+  //
+  // The consequence is that every claimed keyholder looks identical on screen.
+  // The fix is a nickname that lives *on the phone* and never goes near the
+  // radio: the owner sees "Ife's keys", a stranger scanning the room still sees
+  // nothing but "KeyGuard". Same approach Apple uses for AirTags.
+  //
+  // Keyed by BLE remote id, so a phone that owns two keyholders names them
+  // independently.
+
+  String? nicknameFor(String deviceId) =>
+      _prefs.getString('$_kNicknamePrefix$deviceId');
+
+  Future<void> setNickname(String deviceId, String nickname) async {
+    final trimmed = nickname.trim();
+    if (trimmed.isEmpty) {
+      await _prefs.remove('$_kNicknamePrefix$deviceId');
+      return;
+    }
+    await _prefs.setString('$_kNicknamePrefix$deviceId', trimmed);
+  }
+
+  Future<void> clearNickname(String deviceId) =>
+      _prefs.remove('$_kNicknamePrefix$deviceId');
+
+  // --- Proximity alert ---
+
+  /// Warn once when the keyholder passes half the alert distance on its way out.
+  bool get proximityWarningEnabled =>
+      _prefs.getBool(_kProximityWarning) ?? true;
+  Future<void> setProximityWarningEnabled(bool v) =>
+      _prefs.setBool(_kProximityWarning, v);
 }

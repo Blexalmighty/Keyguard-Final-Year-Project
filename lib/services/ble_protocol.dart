@@ -55,6 +55,20 @@ class BleCommands {
   static const String stop = 'STOP';
   static const String getLoc = 'GET_LOC';
 
+  /// Choose the buzzer cadence used by [findKey] and by the low-battery warning.
+  /// Format: `ALERT_SET:<token>` where the token is an
+  /// `AlertPattern.wireName` — `CONT`, `STEADY`, `TRIPLE`, `URGENT`,
+  /// `DISCREET` or `SILENT`.
+  ///
+  /// A *name* rather than raw millisecond values, so that retuning a pattern is
+  /// a firmware change alone. If the app sent `ALERT_SET:250:250:1` the two sides
+  /// would have to agree on timing forever.
+  ///
+  /// The keyholder stores the choice in NVS, so the pattern survives a reboot and
+  /// is used even when the phone is nowhere near — which matters for the
+  /// low-battery chirp.
+  static const String alertSetPrefix = 'ALERT_SET:';
+
   // --- Auth characteristic ---
   /// Take ownership of an unclaimed keyholder. Accepted only while the physical
   /// button is held down. Format: `CLAIM:<ownerId hex>`.
@@ -90,6 +104,14 @@ class BleResponses {
 
   /// `FIND_PHONE|LOC:<lat>,<lng>` — the button on the keyholder was pressed.
   static const String findPhonePrefix = 'FIND_PHONE|LOC:';
+
+  /// `ALERT:<token>` — the cadence the keyholder is actually using.
+  ///
+  /// Sent on connect and after every accepted [BleCommands.alertSetPrefix], so
+  /// the Settings screen shows what the *device* is set to rather than what this
+  /// phone last asked for. Those diverge the moment a second phone owns the
+  /// device, or the app is reinstalled.
+  static const String alertPrefix = 'ALERT:';
 
   // --- Auth characteristic ---
   /// `STATUS:UNCLAIMED` — sent on connect when the keyholder has no owner, so

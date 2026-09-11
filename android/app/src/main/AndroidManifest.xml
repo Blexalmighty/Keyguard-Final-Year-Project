@@ -47,6 +47,36 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
+    <!--
+        Audio on this phone, for "press the button on the keyholder and my phone
+        rings". Two declarations for one capability because Android 13 split media
+        access by type: READ_MEDIA_AUDIO from API 33, the legacy blanket storage
+        read below it — hence maxSdkVersion="32", so modern users are not asked
+        for a permission the platform no longer honours.
+
+        Worth being precise about what these are for. The picker this app uses is
+        the system document picker, which hands back read access to the one file
+        the owner tapped and needs no permission at all. These are declared so the
+        request the owner expects to see actually appears, and so a device that
+        does gate the picker behind them is not left unable to choose a sound. The
+        code treats a refusal as non-fatal and carries on to the picker.
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"
+        tools:targetApi="tiramisu" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- Buzzing as well as ringing: a phone under a cushion is found by feel. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!--
+        The proximity warning ("your keyholder is moving away") is a notification,
+        and from Android 13 posting one needs the user's say-so. This was
+        deliberately absent while the app posted nothing; it earns its place now
+        that NotificationService exists. Requested at runtime, not at install.
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Bluetooth Low Energy is required, not optional: without it there is no app. -->
     <uses-feature android:name="android.hardware.bluetooth_le"
         android:required="true" />

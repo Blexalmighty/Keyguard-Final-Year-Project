@@ -8,4 +8,4 @@
 /// Bump this by hand when producing a build for testing. It is deliberately not
 /// read from the package version: `versionName` stays `1.0.0` across a dozen test
 /// builds, which is exactly the ambiguity this exists to remove.
-const String kBuildStamp = 'build 3 · 2026-09-05';
+const String kBuildStamp = 'build 4 · 2026-09-07';
