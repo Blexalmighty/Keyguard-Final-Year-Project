@@ -188,10 +188,21 @@ class EventModel {
   }
 
   /// True for events that record a security decision rather than normal use.
+  ///
+  /// The Security tab filters on this. It is deliberately broader than
+  /// "something was refused": a ping is the owner commanding the hardware, and a
+  /// disconnect is the moment the lock stops being enforceable from this phone,
+  /// so both belong in an audit trail even though neither is a failure. The
+  /// question the tab answers is *what has happened to my keyholder*, not *what
+  /// went wrong*.
   bool get isSecurityEvent =>
       type == EventType.ownershipClaimed ||
       type == EventType.ownershipReleased ||
-      type == EventType.intruderBlocked;
+      type == EventType.intruderBlocked ||
+      type == EventType.wifiProvisioned ||
+      type == EventType.phonePingedKey ||
+      type == EventType.keyPingedPhone ||
+      type == EventType.disconnected;
 
   /// True when this row can name the keyholder it happened to.
   bool get hasDeviceName =>

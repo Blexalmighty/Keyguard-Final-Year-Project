@@ -11,6 +11,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/alert_pattern.dart';
 import '../models/ble_device.dart';
 import '../models/event_model.dart';
+import '../models/history_retention.dart';
 import '../utils/coordinate_format.dart';
 import 'ble_protocol.dart';
 import 'ble_vendors.dart';
@@ -18,17 +19,6 @@ import 'notification_service.dart';
 import 'phone_ringer_service.dart';
 import 'proximity_model.dart';
 import 'settings_store.dart';
-
-/// How much of the scan result set the Scan screen shows.
-///
-/// This deliberately is **not** a transport picker. There used to be
-/// `all / bluetooth / wifi` here, which implied the phone could reach the
-/// keyholder over either radio and let the user choose. It cannot: the
-/// phone-to-keyholder link is always BLE, and Wi-Fi is something the keyholder
-/// uses to reach the cloud on its own. Presenting that as a connection mode was
-/// misleading, so the only axis left is relevance — everything nearby, or just
-/// keyholders.
-enum ScanFilter { all, keyholders }
 
 /// Central BLE service: discovery, connection, and the data channel to the
 /// keyholder.
@@ -79,6 +69,18 @@ class BleService extends ChangeNotifier {
     if (identical(_notifications, notifications)) return;
     _notifications = notifications;
   }
+
+  /// Set once the app-open notification prompt has been shown, so a later
+  /// permission retry does not ask a second time.
+  ///
+  /// The request itself is deliberately *not* made here in [attachNotifications].
+  /// The constructor's [_checkPermissions] is already walking a chain of Android
+  /// permission dialogs (scan, connect, location), and `permission_handler`
+  /// rejects a request issued while another is in flight — so a notification
+  /// request fired from here, during the same first build, would race that chain
+  /// and usually be swallowed. Instead it is appended to the end of that one
+  /// serialized chain, which also gives the app its "ask on opening" behaviour.
+  bool _notificationPermissionRequested = false;
 
   /// Cap on the stored event log. The history screen is a timeline, not an
   /// archive, and an unbounded JSON blob in preferences would eventually hurt.
@@ -174,7 +176,6 @@ class BleService extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   bool _isScanning = false;
-  ScanFilter _scanFilter = ScanFilter.all;
 
   /// False until the runtime permissions are actually granted.
   bool _hasBluetoothPermission = false;
@@ -206,6 +207,17 @@ class BleService extends ChangeNotifier {
   /// callback with no such guard.
   bool _autoConnectDone = false;
 
+  /// Consecutive failed auto-connect attempts.
+  ///
+  /// A failed connect re-arms the hunt (see [connectToDevice]), which is right
+  /// for the ordinary case — the keyholder was at the edge of range and the
+  /// link did not come up. But a unit that refuses every time would then be
+  /// retried forever, holding the radio on for the rest of the day. After
+  /// [_maxAutoConnectAttempts] the app stops trying by itself and waits for the
+  /// owner to press scan, which resets this.
+  int _autoConnectFailures = 0;
+  static const int _maxAutoConnectAttempts = 3;
+
   /// True while the app should keep re-arming the scan until it finds the
   /// keyholder. See [beginContinuousScan].
   bool _keepHunting = false;
@@ -214,6 +226,12 @@ class BleService extends ChangeNotifier {
   /// True once the keyholder has crossed half the alert distance on its way out,
   /// so the warning fires once per departure rather than on every RSSI sample.
   bool _proximityWarned = false;
+
+  /// The same latch for the configured alert distance itself. Separate from
+  /// [_proximityWarned] because the two boundaries are crossed at different
+  /// moments and each notice has to fire exactly once per departure.
+  bool _outOfRangeWarned = false;
+
   bool _proximityWarningEnabled = true;
 
   // ---------------------------------------------------------------------------
@@ -339,7 +357,6 @@ class BleService extends ChangeNotifier {
   List<double> get rssiBars => List.unmodifiable(_rssiWindow.barHeights);
 
   bool get isScanning => _isScanning;
-  ScanFilter get scanFilter => _scanFilter;
   bool get hasBluetoothPermission => _hasBluetoothPermission;
   String get permissionStatusMessage => _permissionStatusMessage;
 
@@ -353,14 +370,14 @@ class BleService extends ChangeNotifier {
 
   /// The scan list the UI renders, sorted so the interesting things are on top.
   ///
-  /// Keyholders first, then by signal strength. Previously ordering was
-  /// whatever order the radio happened to report, which put a stranger's
-  /// headphones above the user's own keyholder.
+  /// Everything the radio can see, unfiltered. There used to be a relevance
+  /// filter in front of this — all nearby, or keyholders only — and it was
+  /// removed because a keyholder hidden behind the wrong selection is
+  /// indistinguishable from a keyholder that is not there. Ordering does the
+  /// filter's real job: keyholders first, then by signal strength, so the thing
+  /// the owner is looking for is never buried under a neighbour's television.
   List<BleDevice> get filteredScannedDevices {
-    final list = _scanFilter == ScanFilter.keyholders
-        ? _scannedDevices.where((d) => d.isKeyholder).toList()
-        : List<BleDevice>.from(_scannedDevices);
-
+    final list = List<BleDevice>.from(_scannedDevices);
     list.sort((a, b) {
       if (a.isKeyholder != b.isKeyholder) return a.isKeyholder ? -1 : 1;
       return b.rssi.compareTo(a.rssi);
@@ -439,6 +456,10 @@ class BleService extends ChangeNotifier {
       if (_knownDeviceId != null) _deviceId = _knownDeviceId!;
       _proximityWarningEnabled = store.proximityWarningEnabled;
 
+      // Read before the history it governs, so the restore below can drop
+      // anything already past its date rather than briefly showing it.
+      _historyRetention = store.historyRetention;
+
       _restoreHistory(store.historyJson);
 
       if (_demoModeEnabled) _startDemoMode();
@@ -458,9 +479,43 @@ class BleService extends ChangeNotifier {
           .whereType<Map<String, dynamic>>()
           .map(EventModel.fromJson)
           .toList();
+      // Enforced on the way in as well as on the way out. The app may have been
+      // closed for longer than the retention window, in which case the rows are
+      // already expired by the time they are read back and must not be shown.
+      if (_pruneHistory()) unawaited(_persistHistory());
     } catch (e) {
       debugPrint('BleService: discarding unreadable history: $e');
     }
+  }
+
+  /// The owner's retention choice. Defaults to [HistoryRetention.forever] until
+  /// settings load, so nothing is ever deleted on the strength of a default.
+  HistoryRetention _historyRetention = HistoryRetention.forever;
+
+  HistoryRetention get historyRetention => _historyRetention;
+
+  /// Change how long location history is kept, applying it immediately.
+  ///
+  /// Applied at once rather than at the next event, because a setting that
+  /// promises to delete something should have done so by the time the owner has
+  /// finished reading the row they just tapped.
+  Future<void> setHistoryRetention(HistoryRetention value) async {
+    if (_historyRetention == value) return;
+    _historyRetention = value;
+    await _settings?.setHistoryRetention(value);
+    if (_pruneHistory()) await _persistHistory();
+    notifyListeners();
+  }
+
+  /// Drop events older than the retention window. Returns true if any were
+  /// removed, so callers know whether a re-save is needed.
+  bool _pruneHistory() {
+    final cutoff = _historyRetention.cutoffFrom(DateTime.now());
+    if (cutoff == null || _historyEvents.isEmpty) return false;
+    final before = _historyEvents.length;
+    _historyEvents =
+        _historyEvents.where((e) => e.timestamp.isAfter(cutoff)).toList();
+    return _historyEvents.length != before;
   }
 
   Future<void> _persistHistory() async {
@@ -592,6 +647,17 @@ class BleService extends ChangeNotifier {
       // it, hence the best-effort request.
       final location = await Permission.locationWhenInUse.request();
 
+      // The notification prompt rides on the tail of the Bluetooth chain rather
+      // than racing it — see [_notificationPermissionRequested]. Asked once per
+      // app open, after the requests above have all resolved, so the owner sees
+      // one orderly sequence of dialogs rather than two that collide. Awaited so
+      // it stays part of that sequence; a denial is a real answer and the
+      // posting methods already fall silent without the grant.
+      if (!_notificationPermissionRequested) {
+        _notificationPermissionRequested = true;
+        await _notifications?.requestPermission();
+      }
+
       if (scan.isGranted && connect.isGranted) {
         _hasBluetoothPermission = true;
         _permissionStatusMessage = location.isGranted
@@ -625,12 +691,6 @@ class BleService extends ChangeNotifier {
   // ===========================================================================
   // Scanning
   // ===========================================================================
-
-  void setScanFilter(ScanFilter filter) {
-    if (_scanFilter == filter) return;
-    _scanFilter = filter;
-    notifyListeners();
-  }
 
   void _listenScanResults() {
     if (kIsWeb) return;
@@ -859,9 +919,9 @@ class BleService extends ChangeNotifier {
 
   /// A narrow scan that only surfaces KeyGuard hardware, for the pairing flow.
   ///
-  /// The general scan above is intentionally unfiltered so the All Devices tab
-  /// can still list headphones and watches; only one BLE scan can run at a time,
-  /// so the two cannot be combined.
+  /// The general scan above is intentionally unfiltered so the Scan tab can list
+  /// everything in the room; only one BLE scan can run at a time, so the two
+  /// cannot be combined.
   Future<void> startKeyholderOnlyScan() async {
     if (kIsWeb || !_hasBluetoothPermission || !isBluetoothOn) return;
     try {
@@ -896,7 +956,11 @@ class BleService extends ChangeNotifier {
       endContinuousScan();
       return stopActiveHardwareScan();
     }
-    // Choosing to scan is also choosing to keep looking until it connects.
+    // Choosing to scan is also choosing to keep looking until it connects — and
+    // it clears any automatic give-up, because pressing scan is the owner saying
+    // "try again" after the run of failures that stopped the hunt.
+    _autoConnectFailures = 0;
+    _autoConnectDone = false;
     beginContinuousScan();
     return startActiveHardwareScan();
   }
@@ -912,6 +976,10 @@ class BleService extends ChangeNotifier {
     _isConnecting = true;
     _lastError = '';
     notifyListeners();
+
+    // Read in `finally`, where the retry decision is made. A local rather than a
+    // field because it describes this one attempt, not the service.
+    bool connectFailed = false;
 
     try {
       await stopActiveHardwareScan();
@@ -951,6 +1019,7 @@ class BleService extends ChangeNotifier {
       // Found it — stop re-arming the scan and give the radio back.
       endContinuousScan();
       _proximityWarned = false;
+      _outOfRangeWarned = false;
 
       _knownDeviceId = _deviceId;
       await _settings?.setLastDevice(_deviceId, _deviceName);
@@ -958,7 +1027,23 @@ class BleService extends ChangeNotifier {
       _rssiWindow.clear();
       _startRssiPolling(device);
 
+      // Connected, so the run of failures is over.
+      _autoConnectFailures = 0;
+
       _logEvent(EventType.connected);
+
+      // Posted after the event is logged so the shade and History agree. This is
+      // the moment the owner's keys became findable again, and they are very
+      // often not looking at the app when it happens — an auto-reconnect fires
+      // while the phone is in a pocket.
+      unawaited(
+        _notifications?.showLinkState(
+              deviceName: displayName,
+              connected: true,
+            ) ??
+            Future.value(),
+      );
+      unawaited(_notifications?.cancelOutOfRange() ?? Future.value());
 
       // Ask for a position immediately so the map has something real to show
       // instead of a placeholder.
@@ -967,9 +1052,34 @@ class BleService extends ChangeNotifier {
       _lastError = 'Could not connect: $e';
       await _teardownSession();
       _isConnected = false;
+      connectFailed = true;
     } finally {
       _isConnecting = false;
       notifyListeners();
+
+      // A failed connect used to be a dead end for auto-connect. `_autoConnectDone`
+      // stayed set, so the keyholder was never tried again; and the scan had been
+      // stopped up at the top of this method while `_isConnecting` was still true,
+      // which is exactly the condition that suppresses the automatic re-arm in
+      // [_listenScanningFlag]. The result was an app that silently stopped looking
+      // and needed the owner to press scan — the one thing auto-connect exists to
+      // avoid.
+      //
+      // Re-armed here, in `finally`, because `beginContinuousScan` checks
+      // `_isConnecting` and would do nothing if called before the line above.
+      if (connectFailed && !kIsWeb) {
+        _autoConnectFailures++;
+        if (_autoConnectFailures < _maxAutoConnectAttempts) {
+          _autoConnectDone = false;
+          beginContinuousScan();
+        } else {
+          // Out of automatic attempts. Say so, rather than leaving the owner
+          // looking at a screen that claims nothing is wrong.
+          _lastError = 'Could not connect after $_autoConnectFailures tries. '
+              'Tap the dial to try again.';
+          notifyListeners();
+        }
+      }
     }
   }
 
@@ -1184,14 +1294,34 @@ class BleService extends ChangeNotifier {
           includeLocation: _saveGpsOnDisconnect);
     }
 
+    // Told to the owner, not just written to the log. A disconnect while the app
+    // is in the background is the single event they most need to hear about: it
+    // is what "I left my keys behind" looks like from the phone's side.
+    //
+    // Posted on every involuntary drop, including one the owner caused by
+    // pressing Disconnect — `logEvent` is false only in paths that are not a
+    // real session ending, and suppressing the notice for a deliberate
+    // disconnect would mean the button silently does two different things.
+    if (wasConnected) {
+      unawaited(
+        _notifications?.showLinkState(
+              deviceName: displayName,
+              connected: false,
+            ) ??
+            Future.value(),
+      );
+    }
+
     _discovered.updateAll((_, d) => d.copyWith(isConnected: false));
     _rebuildScannedDevices();
 
-    // The proximity warning is armed again for the next departure. Any banner
+    // The proximity warnings are armed again for the next departure. Any banner
     // still in the shade is pulled: it quotes a distance, and with the link gone
     // that number is a guess about where the keys were, not where they are.
     _proximityWarned = false;
+    _outOfRangeWarned = false;
     unawaited(_notifications?.cancelProximityWarning() ?? Future.value());
+    unawaited(_notifications?.cancelOutOfRange() ?? Future.value());
 
     // Start hunting immediately. A disconnect while the app is open almost
     // always means the owner has walked out of range of their keys, so this is
@@ -1248,16 +1378,19 @@ class BleService extends ChangeNotifier {
     });
   }
 
-  /// Warn once when the keyholder crosses **half** the alert distance.
+  /// Warn once when the keyholder crosses **half** the alert distance, and again
+  /// when it crosses the distance itself.
   ///
-  /// Half, not the threshold itself, because a warning that arrives at the
-  /// moment you are already out of range arrives too late to be useful. The
-  /// point is to catch the owner while turning away from the desk, not to
-  /// announce a loss after the fact.
+  /// Half, not only the threshold, because a warning that arrives at the moment
+  /// you are already out of range arrives too late to be useful. The point is to
+  /// catch the owner while turning away from the desk, not to announce a loss
+  /// after the fact — so the halfway notice is silent advice and the threshold
+  /// notice, which is the one they actually configured, is allowed to make a
+  /// sound.
   ///
-  /// Fires once per departure. Without the latch this would notify on every
-  /// two-second RSSI sample for as long as the owner stood near the boundary —
-  /// and RSSI is noisy enough that they would not even have to move.
+  /// Each fires once per departure. Without the latches this would notify on
+  /// every two-second RSSI sample for as long as the owner stood near a
+  /// boundary — and RSSI is noisy enough that they would not even have to move.
   void _evaluateProximityWarning() {
     if (!_proximityWarningEnabled) return;
     final d = _estimatedDistance;
@@ -1269,13 +1402,32 @@ class BleService extends ChangeNotifier {
     // boundary cannot rattle the latch on and off.
     if (_proximityWarned) {
       if (d < halfway * 0.75) _proximityWarned = false;
-      return;
-    }
-
-    if (d >= halfway) {
+    } else if (d >= halfway) {
       _proximityWarned = true;
       unawaited(
         _notifications?.showProximityWarning(
+              deviceName: displayName,
+              distanceMetres: d,
+              thresholdMetres: _alertDistanceThreshold,
+            ) ??
+            Future.value(),
+      );
+    }
+
+    // The threshold itself, latched independently. Same 25% margin, applied to
+    // the full distance: walking back to the desk clears the notice and re-arms
+    // it for the next time the owner leaves.
+    if (_outOfRangeWarned) {
+      if (d < _alertDistanceThreshold * 0.75) {
+        _outOfRangeWarned = false;
+        unawaited(_notifications?.cancelOutOfRange() ?? Future.value());
+      }
+      return;
+    }
+    if (d >= _alertDistanceThreshold) {
+      _outOfRangeWarned = true;
+      unawaited(
+        _notifications?.showOutOfRange(
               deviceName: displayName,
               distanceMetres: d,
               thresholdMetres: _alertDistanceThreshold,
@@ -1289,7 +1441,12 @@ class BleService extends ChangeNotifier {
 
   Future<void> setProximityWarningEnabled(bool value) async {
     _proximityWarningEnabled = value;
-    if (!value) _proximityWarned = false;
+    if (!value) {
+      _proximityWarned = false;
+      _outOfRangeWarned = false;
+      unawaited(_notifications?.cancelProximityWarning() ?? Future.value());
+      unawaited(_notifications?.cancelOutOfRange() ?? Future.value());
+    }
     await _settings?.setProximityWarningEnabled(value);
     // The warning is a system notification. Android 13+ asks before an app may
     // post one, so turning the toggle on is the right moment to ask: the owner
@@ -1680,6 +1837,9 @@ class BleService extends ChangeNotifier {
     if (_historyEvents.length > _maxHistoryEntries) {
       _historyEvents = _historyEvents.sublist(0, _maxHistoryEntries);
     }
+    // The retention window is checked here too, so a phone left running for
+    // weeks expires old rows as it goes instead of only at the next launch.
+    _pruneHistory();
     unawaited(_persistHistory());
     notifyListeners();
   }

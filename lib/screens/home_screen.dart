@@ -89,21 +89,6 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                         const SizedBox(height: 12),
 
-                        // The button was already greyed out while disconnected,
-                        // but nothing said why, so a dead button read as a bug.
-                        AppSwap(
-                          child: !bleService.isConnected
-                              ? Text(
-                                  'Connect to your keyholder from the Scan tab '
-                                  'to sound its buzzer.',
-                                  key: const ValueKey('hint'),
-                                  textAlign: TextAlign.center,
-                                  style: AppTypography.bodyMd(color: p.muted),
-                                )
-                              : const SizedBox(
-                                  key: ValueKey('none'), height: 0),
-                        ),
-
                         AppSwap(
                           child: bleService.isAlertActive
                               ? Padding(

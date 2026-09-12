@@ -2,14 +2,19 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-/// System notifications, for the one thing this app needs to say while the
-/// owner is not looking at it: *your keys are getting away from you*.
+/// System notifications: the things this app needs to say while the owner is not
+/// looking at it.
 ///
-/// Deliberately narrow. There is exactly one notification in this app, and it is
-/// posted from one place ([BleService._evaluateProximityWarning]). A general
-/// notification helper would invite the app to start talking, and an object
-/// locator that cries wolf gets its notifications switched off, at which point
-/// it cannot warn about anything.
+/// Four messages, and deliberately no more — the keyholder moving away, the
+/// keyholder past the distance the owner set, and the link coming up or going
+/// down. Each one is posted from exactly one place in [BleService] and replaces
+/// its own previous copy rather than stacking, because an object locator that
+/// fills the shade gets its notifications switched off, at which point it cannot
+/// warn about anything.
+///
+/// The restraint is load-bearing. Anything that is merely interesting goes in
+/// History instead, where the owner can go and look for it; a notification has to
+/// earn an interruption.
 ///
 /// **Why POST_NOTIFICATIONS is now declared.** It was deliberately left out of
 /// the manifest when the app posted nothing — declaring a permission that is
@@ -35,6 +40,23 @@ class NotificationService {
   static const String _channelId = 'keyguard_proximity';
   static const int _proximityId = 1001;
 
+  /// Connect and disconnect notices share a channel, separate from proximity.
+  ///
+  /// Two channels rather than one because they are different kinds of message
+  /// and Android lets the owner say so: a link notice is a fact about state, and
+  /// somebody who finds "Connected" in the shade every morning can silence just
+  /// that without also silencing the warning that their keys are walking away.
+  /// Collapsing both into one channel would make muting the noisy half mute the
+  /// important half too.
+  static const String _linkChannelId = 'keyguard_link';
+  static const int _linkId = 1002;
+
+  /// Posted when the keyholder passes the owner's *configured* alert distance,
+  /// as distinct from the halfway warning. Its own id so the two can sit in the
+  /// shade together — the halfway notice is advice, this one is the event the
+  /// owner actually set a threshold for.
+  static const int _outOfRangeId = 1003;
+
   Future<void> init() async {
     if (!supported || _ready) return;
 
@@ -59,6 +81,18 @@ class NotificationService {
           description:
               'Warns you when your keyholder is moving out of range.',
           importance: Importance.high,
+        ),
+      );
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _linkChannelId,
+          'Connection status',
+          description:
+              'Tells you when your keyholder connects or disconnects.',
+          // Deliberately below the proximity channel. A connection notice should
+          // appear in the shade without interrupting whatever the owner is
+          // doing; only "your keys are getting away" has earned a heads-up.
+          importance: Importance.defaultImportance,
         ),
       );
 
@@ -141,6 +175,104 @@ class NotificationService {
     if (!supported) return;
     try {
       await _plugin.cancel(_proximityId);
+    } catch (e) {
+      debugPrint('NotificationService: cancel failed: $e');
+    }
+  }
+
+  /// The keyholder connected or disconnected.
+  ///
+  /// One notification id for both, so the shade holds the *current* state rather
+  /// than a history of every transition. A phone that spends an afternoon at the
+  /// edge of range would otherwise stack a dozen alternating notices, which is
+  /// the fastest way to teach somebody to swipe this app away without reading it.
+  ///
+  /// The disconnect case is the one that matters: it is posted at the moment the
+  /// owner has most likely walked away from their keys, and unlike the proximity
+  /// warning it does not depend on having a distance estimate — there is no link
+  /// left to measure one on.
+  Future<void> showLinkState({
+    required String deviceName,
+    required bool connected,
+  }) async {
+    if (!supported || !_permitted) return;
+    if (!_ready) await init();
+
+    try {
+      await _plugin.show(
+        _linkId,
+        connected ? '$deviceName connected' : '$deviceName disconnected',
+        connected
+            ? 'In range and responding.'
+            : 'Out of range or switched off. KeyGuard is looking for it.',
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _linkChannelId,
+            'Connection status',
+            channelDescription:
+                'Tells you when your keyholder connects or disconnects.',
+            importance: Importance.defaultImportance,
+            priority: Priority.defaultPriority,
+            playSound: false,
+            onlyAlertOnce: true,
+            category: AndroidNotificationCategory.status,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('NotificationService: link notice failed: $e');
+    }
+  }
+
+  /// The keyholder has passed the alert distance the owner configured.
+  ///
+  /// Distinct from [showProximityWarning], which fires at *half* that distance
+  /// as an early nudge. This one is the threshold itself being crossed, so it is
+  /// allowed to make a sound: the halfway notice said "you are walking away from
+  /// your keys" and was ignored, and this is the last quiet moment before the
+  /// link drops entirely.
+  Future<void> showOutOfRange({
+    required String deviceName,
+    required double distanceMetres,
+    required double thresholdMetres,
+  }) async {
+    if (!supported || !_permitted) return;
+    if (!_ready) await init();
+
+    final metres = distanceMetres < 10
+        ? distanceMetres.toStringAsFixed(1)
+        : distanceMetres.round().toString();
+
+    try {
+      await _plugin.show(
+        _outOfRangeId,
+        '$deviceName is out of range',
+        'About $metres m away, past your '
+            '${thresholdMetres.toStringAsFixed(thresholdMetres < 10 ? 1 : 0)} m '
+            'alert distance.',
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _channelId,
+            'Proximity warnings',
+            channelDescription:
+                'Warns you when your keyholder is moving out of range.',
+            importance: Importance.high,
+            priority: Priority.high,
+            playSound: true,
+            onlyAlertOnce: true,
+            category: AndroidNotificationCategory.alarm,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('NotificationService: out-of-range notice failed: $e');
+    }
+  }
+
+  Future<void> cancelOutOfRange() async {
+    if (!supported) return;
+    try {
+      await _plugin.cancel(_outOfRangeId);
     } catch (e) {
       debugPrint('NotificationService: cancel failed: $e');
     }

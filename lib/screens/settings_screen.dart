@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../build_info.dart';
 import '../models/alert_pattern.dart';
+import '../models/history_retention.dart';
 import '../models/phone_alert_tone.dart';
 import '../services/ble_service.dart';
 import '../services/pairing_service.dart';
@@ -1182,13 +1183,17 @@ class _BatteryCard extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          Text(
-            hasReading
-                ? 'Read from the TP4056 pack through the ADC on GPIO 3.'
-                : 'Connect to your keyholder to read its battery level.',
-            style: AppTypography.bodyMd(color: p.muted),
-          ),
+          // Nothing is printed once there *is* a reading. The percentage and the
+          // bar above already say everything an owner can act on; a line naming
+          // the charger IC and the ADC pin underneath them was describing the
+          // implementation, not the battery.
+          if (!hasReading) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Connect to your keyholder to read its battery level.',
+              style: AppTypography.bodyMd(color: p.muted),
+            ),
+          ],
         ],
       ),
     );
@@ -1316,6 +1321,8 @@ class _NetworkCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
+          _RetentionPicker(bleService: bleService),
+          const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
@@ -1339,10 +1346,101 @@ class _NetworkCard extends StatelessWidget {
   }
 }
 
+/// How long location history is kept before the app deletes it by itself.
+///
+/// Lives under Cloud Reporting because that is where the owner is already
+/// thinking about what leaves the phone and what is kept. The log is a record of
+/// where the keyholder — and so its owner — has been, and the honest way to
+/// offer that is with an expiry date the owner sets, not an archive that grows
+/// forever because nobody thought about it.
+///
+/// Laid out as a row of chips rather than a dropdown: there are four choices,
+/// they are all short, and the current one should be readable without tapping
+/// anything.
+class _RetentionPicker extends StatelessWidget {
+  const _RetentionPicker({required this.bleService});
+
+  final BleService bleService;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    final current = bleService.historyRetention;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.auto_delete_outlined, size: 17, color: p.muted),
+            const SizedBox(width: 9),
+            Text('Clear location history',
+                style: AppTypography.bodyLg(color: p.onSurface)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          current.description,
+          style: AppTypography.bodyMd(color: p.onSurfaceVariant),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final option in HistoryRetention.values)
+              _RetentionChip(
+                label: option.label,
+                selected: option == current,
+                onTap: () => bleService.setHistoryRetention(option),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _RetentionChip extends StatelessWidget {
+  const _RetentionChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+
+    return PressableScale(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: AppMotion.normal,
+        curve: AppMotion.standard,
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? p.primarySoft : p.surfaceAlt,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: selected ? p.primary : p.border),
+        ),
+        child: Text(
+          label,
+          style: AppTypography.bodyMd(
+            color: selected ? p.primary : p.onSurfaceVariant,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // =============================================================================
 // Ownership
 // =============================================================================
-
 /// Which keyholders this phone holds a key for, and how to let one go.
 ///
 /// Releasing has to be here and has to be easy. A keyholder that only its

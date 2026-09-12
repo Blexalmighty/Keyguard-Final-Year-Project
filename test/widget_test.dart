@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keyguard/main.dart';
 import 'package:keyguard/models/event_model.dart';
+import 'package:keyguard/models/history_retention.dart';
 
 void main() {
   // BleService reaches for shared_preferences and the Bluetooth adapter on
@@ -119,8 +120,19 @@ void main() {
       expect(at(EventType.intruderBlocked).isSecurityEvent, isTrue);
       expect(at(EventType.ownershipClaimed).isSecurityEvent, isTrue);
       expect(at(EventType.ownershipReleased).isSecurityEvent, isTrue);
+
+      // Pings and disconnects are security events too. A ping is the owner
+      // commanding the hardware and a disconnect is the moment the lock stops
+      // being enforceable from this phone, so both belong in the audit trail
+      // even though neither is a failure.
+      expect(at(EventType.phonePingedKey).isSecurityEvent, isTrue);
+      expect(at(EventType.keyPingedPhone).isSecurityEvent, isTrue);
+      expect(at(EventType.disconnected).isSecurityEvent, isTrue);
+
+      // Connecting stays out: it is the normal, expected state of the system,
+      // and a Security tab that lists every successful connection is a Security
+      // tab nobody reads.
       expect(at(EventType.connected).isSecurityEvent, isFalse);
-      expect(at(EventType.phonePingedKey).isSecurityEvent, isFalse);
     });
 
     test('reports no GPS fix rather than inventing a place name', () {
@@ -153,6 +165,39 @@ void main() {
       expect(fix.coordinatesFormatted, contains('N'));
       expect(fix.coordinatesFormatted, contains('E'));
       expect(fix.coordinatesFormatted, isNot(contains('W')));
+    });
+  });
+
+  group('HistoryRetention', () {
+    test('defaults to keeping everything', () {
+      // The default matters more than the rest of this file: it decides whether
+      // an app update silently deletes history the owner never agreed to lose.
+      expect(HistoryRetention.fromStorage(null), HistoryRetention.forever);
+      expect(HistoryRetention.fromStorage(''), HistoryRetention.forever);
+      expect(
+        HistoryRetention.fromStorage('something_removed_later'),
+        HistoryRetention.forever,
+      );
+    });
+
+    test('round-trips through storage by name, not index', () {
+      for (final r in HistoryRetention.values) {
+        expect(HistoryRetention.fromStorage(r.storageValue), r);
+      }
+    });
+
+    test('cutoff is null only when nothing should be deleted', () {
+      final now = DateTime.utc(2026, 9, 12);
+
+      expect(HistoryRetention.forever.cutoffFrom(now), isNull);
+      expect(HistoryRetention.forever.prunes, isFalse);
+
+      expect(HistoryRetention.week.cutoffFrom(now), DateTime.utc(2026, 9, 5));
+      expect(
+        HistoryRetention.fortnight.cutoffFrom(now),
+        DateTime.utc(2026, 8, 29),
+      );
+      expect(HistoryRetention.month.cutoffFrom(now), DateTime.utc(2026, 8, 13));
     });
   });
 }

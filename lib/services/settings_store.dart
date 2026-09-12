@@ -1,6 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/alert_pattern.dart';
+import '../models/history_retention.dart';
 import '../models/phone_alert_tone.dart';
 import 'proximity_model.dart';
 
@@ -33,6 +34,7 @@ class SettingsStore {
   static const String _kTxPower = 'rssi_tx_power';
   static const String _kPathLoss = 'rssi_path_loss_exponent';
   static const String _kHistory = 'history_events_json';
+  static const String _kHistoryRetention = 'history_retention';
   static const String _kNicknamePrefix = 'device_nickname_';
   static const String _kProximityWarning = 'proximity_warning_enabled';
   static const String _kLastDeviceId = 'last_device_id';
@@ -100,6 +102,11 @@ class SettingsStore {
   bool get wifiCloudSyncEnabled => _prefs.getBool(_kWifiCloudSync) ?? true;
   Future<void> setWifiCloudSyncEnabled(bool v) =>
       _prefs.setBool(_kWifiCloudSync, v);
+
+  HistoryRetention get historyRetention =>
+      HistoryRetention.fromStorage(_prefs.getString(_kHistoryRetention));
+  Future<void> setHistoryRetention(HistoryRetention v) =>
+      _prefs.setString(_kHistoryRetention, v.storageValue);
 
   bool get darkModeEnabled => _prefs.getBool(_kDarkMode) ?? false;
   Future<void> setDarkModeEnabled(bool v) => _prefs.setBool(_kDarkMode, v);

@@ -13,14 +13,20 @@ import 'pairing_screen.dart';
 
 /// Device discovery.
 ///
-/// **There is deliberately no Bluetooth-vs-Wi-Fi split here.** The screen used
-/// to carry three filter chips — All / Bluetooth / Wi-Fi — and a whole Wi-Fi
-/// panel, which implied the phone could reach the keyholder over either radio.
-/// It cannot: the phone-to-keyholder link is always BLE. Wi-Fi is something the
-/// keyholder uses by itself, to reach the cloud when the phone is out of range.
-/// Offering it as a connection mode gave the user a choice that did not exist,
-/// so the screen now says one thing: connect to the device. Which radio is
-/// carrying a given byte is an implementation detail and is never shown.
+/// **There is deliberately no Bluetooth-vs-Wi-Fi split here, and no filter.**
+/// The screen used to carry three transport chips — All / Bluetooth / Wi-Fi —
+/// and a whole Wi-Fi panel, which implied the phone could reach the keyholder
+/// over either radio. It cannot: the phone-to-keyholder link is always BLE.
+/// Wi-Fi is something the keyholder uses by itself, to reach the cloud when the
+/// phone is out of range.
+///
+/// Those chips were then replaced by a relevance filter — All nearby vs
+/// Keyholders only — which is gone for the same underlying reason: it made the
+/// list's contents depend on a mode the user had to notice and get right, and a
+/// keyholder sitting behind the wrong selection looks exactly like a keyholder
+/// that is not there. One unfiltered list of what the radio can see is both
+/// simpler and harder to misread; keyholders are sorted to the top and given the
+/// emphasised card, which is what the filter was really for.
 ///
 /// Network setup for the keyholder lives in Settings, where it belongs — it is a
 /// once-per-device configuration step, not a peer of "find my keys".
@@ -78,19 +84,13 @@ class ScanScreen extends StatelessWidget {
 
                         FadeSlideIn(
                           delay: AppMotion.stagger * 2,
-                          child: _FilterChips(bleService: bleService),
-                        ),
-                        const SizedBox(height: 18),
-
-                        FadeSlideIn(
-                          delay: AppMotion.stagger * 3,
                           child: _resultsHeader(bleService, devices.length, p),
                         ),
                         const SizedBox(height: 12),
 
                         if (devices.isEmpty)
                           FadeSlideIn(
-                            delay: AppMotion.stagger * 4,
+                            delay: AppMotion.stagger * 3,
                             child: _EmptyResults(bleService: bleService),
                           )
                         else
@@ -299,128 +299,6 @@ class _ScanAppBar extends StatelessWidget {
 }
 
 // =============================================================================
-// Filter
-// =============================================================================
-
-/// Two chips: everything nearby, or keyholders only.
-///
-/// This replaced the transport chips. It filters by *relevance*, which is a real
-/// distinction the user can act on — "I only care about my keyholder" — unlike
-/// "connect over Bluetooth or over Wi-Fi", which was never a choice.
-class _FilterChips extends StatelessWidget {
-  const _FilterChips({required this.bleService});
-
-  final BleService bleService;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = AppPalette.of(context);
-    final filter = bleService.scanFilter;
-
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: p.surfaceAlt,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: p.border),
-      ),
-      child: Row(
-        children: [
-          _segment(
-            context: context,
-            label: 'All nearby',
-            icon: Icons.devices_other_rounded,
-            selected: filter == ScanFilter.all,
-            onTap: () => bleService.setScanFilter(ScanFilter.all),
-          ),
-          _segment(
-            context: context,
-            label: 'Keyholders only',
-            icon: Icons.vpn_key_rounded,
-            selected: filter == ScanFilter.keyholders,
-            onTap: () => bleService.setScanFilter(ScanFilter.keyholders),
-            badge: bleService.keyholderCount,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _segment({
-    required BuildContext context,
-    required String label,
-    required IconData icon,
-    required bool selected,
-    required VoidCallback onTap,
-    int? badge,
-  }) {
-    final p = AppPalette.of(context);
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        // Transparent rather than null so the whole segment is a hit target,
-        // not just the text and icon inside it.
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: AppMotion.normal,
-          curve: AppMotion.standard,
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          decoration: BoxDecoration(
-            color: selected ? p.primary : Colors.transparent,
-            borderRadius: BorderRadius.circular(18),
-            boxShadow: selected
-                ? [
-                    BoxShadow(
-                      color: p.primary.withValues(alpha: 0.28),
-                      blurRadius: 10,
-                      offset: const Offset(0, 3),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 14,
-                  color: selected ? p.onPrimary : p.muted),
-              const SizedBox(width: 5),
-              Text(
-                label,
-                style: AppTypography.microLabel(
-                  color: selected ? p.onPrimary : p.muted,
-                ).copyWith(
-                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  fontSize: 11,
-                ),
-              ),
-              if (badge != null && badge > 0) ...[
-                const SizedBox(width: 5),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                  decoration: BoxDecoration(
-                    color: selected
-                        ? p.onPrimary.withValues(alpha: 0.22)
-                        : p.primarySoft,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '$badge',
-                    style: AppTypography.microLabel(
-                      color: selected ? p.onPrimary : p.primary,
-                    ).copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// =============================================================================
 // Banners
 // =============================================================================
 
@@ -528,16 +406,11 @@ class _EmptyResults extends StatelessWidget {
       message = 'Grant the Bluetooth permission above to start scanning.';
     } else if (!bleService.isBluetoothOn) {
       message = 'Bluetooth is off, so nothing can be found.';
-    } else if (bleService.scanFilter == ScanFilter.keyholders &&
-        bleService.keyholderCount == 0 &&
-        bleService.isScanning) {
-      message = 'No keyholder in range yet. Switch to All nearby if you want '
-          'to see everything the scan is picking up.';
     } else if (bleService.isScanning) {
       message = 'Scanning… nothing in range yet. Keep the keyholder within a '
           'few metres of the phone.';
     } else {
-      message = 'Tap the dial to scan for your keyholder.';
+      message = 'Tap the dial to scan for nearby devices.';
     }
 
     return Container(
