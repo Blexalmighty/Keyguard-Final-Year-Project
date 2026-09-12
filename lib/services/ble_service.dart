@@ -686,7 +686,7 @@ class BleService extends ChangeNotifier {
         isConnected: _isConnected && id == _connectedDevice?.remoteId.str,
         isPrimary: isKeyholder && id == _knownDeviceId,
         ownership: isKeyholder
-            ? _advertisedOwnership(advertised ?? '', id)
+            ? _advertisedOwnership(r, id)
             : OwnershipState.unknown,
       );
 
@@ -751,16 +751,40 @@ class BleService extends ChangeNotifier {
 
   /// What the advertisement alone can tell us about ownership.
   ///
-  /// The firmware advertises [BleNames.unclaimed] until it has an owner and the
-  /// neutral [BleNames.claimed] afterwards, so an unclaimed unit is recognisable
-  /// before connecting. Anything already claimed is reported as
-  /// [OwnershipState.claimedByOther] unless it is *our* device — the real answer
-  /// only arrives from the challenge in Phase 2, and guessing optimistically
-  /// here would show a Connect button that cannot work.
-  OwnershipState _advertisedOwnership(String name, String id) {
-    if (name == BleNames.unclaimed) return OwnershipState.unclaimed;
+  /// The keyholder advertises its claim state as one byte of service data under
+  /// [BleUuids.service] — see [BleAdvState]. It used to be inferred from the
+  /// advertised name instead, but the name is now the same in both states
+  /// ([BleNames.keyholder]), because a name long enough to distinguish them did
+  /// not fit in the advertising packet beside the service UUID.
+  ///
+  /// A claimed keyholder is reported as [OwnershipState.claimedByOther] unless
+  /// it is *our* device: the real answer only arrives from the challenge in
+  /// Phase 2, and guessing optimistically here would show a Connect button that
+  /// cannot work.
+  ///
+  /// When the advertisement carries no state byte at all the answer is
+  /// [OwnershipState.unknown], which leaves the device pairable. That is not
+  /// laxity — it is the honest reading. Firmware predating the state byte (and
+  /// the simplified sketch, which has no notion of ownership) says nothing about
+  /// ownership, and treating silence as "claimed by somebody else" would lock
+  /// the user out of their own hardware with a Locked badge that nothing can
+  /// clear. The firmware still refuses an unauthorised session; this only
+  /// decides whether the app is willing to try.
+  OwnershipState _advertisedOwnership(ScanResult r, String id) {
+    final state = r.advertisementData.serviceData[Guid(BleUuids.service)];
+    if (state != null && state.isNotEmpty) {
+      if (state.first == BleAdvState.unclaimed) return OwnershipState.unclaimed;
+      return id == _knownDeviceId
+          ? OwnershipState.claimedByMe
+          : OwnershipState.claimedByOther;
+    }
+
+    // Legacy firmware: the name was the signal.
+    if (_advertisedName(r) == BleNames.legacyUnclaimed) {
+      return OwnershipState.unclaimed;
+    }
     if (id == _knownDeviceId) return OwnershipState.claimedByMe;
-    return OwnershipState.claimedByOther;
+    return OwnershipState.unknown;
   }
 
   BleDeviceType _guessDeviceType(String name) {
@@ -1891,7 +1915,7 @@ class BleService extends ChangeNotifier {
     final rand = Random(7); // Fixed seed: reproducible for screenshots.
     _discovered['DEMO-KEYHOLDER'] = BleDevice(
       id: 'DEMO-KEYHOLDER',
-      name: 'BLE-Keyholder (demo)',
+      name: 'KeyGuard (demo)',
       rssi: -48,
       macAddress: 'DE:M0:00:01',
       deviceType: BleDeviceType.keyholder,

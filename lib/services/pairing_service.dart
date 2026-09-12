@@ -126,7 +126,7 @@ class PairingService extends ChangeNotifier {
     for (final id in ids) {
       devices.add(PairedDevice(
         deviceId: id,
-        name: await _identity.nameFor(id) ?? BleNames.claimed,
+        name: await _identity.nameFor(id) ?? BleNames.keyholder,
         claimedAt: await _identity.claimedAt(id),
       ));
     }

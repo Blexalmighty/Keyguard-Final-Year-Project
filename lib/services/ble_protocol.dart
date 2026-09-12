@@ -29,21 +29,52 @@ class BleUuids {
   static const String provChar = 'beb5483e-36e1-4688-b7f5-ea07361b26aa';
 }
 
-/// Advertised device names.
+/// Advertised device name.
 class BleNames {
   BleNames._();
 
-  /// Advertised while the keyholder has no owner.
-  static const String unclaimed = 'BLE-Keyholder';
+  /// The single name a keyholder advertises, in either ownership state.
+  ///
+  /// Deliberately generic — it carries no per-unit identifier, so a passer-by
+  /// cannot single out *this* keyholder (and by extension its owner) from a
+  /// scan. See docs/SECURITY_MODEL.md.
+  ///
+  /// Eight characters, and there is no room for a ninth. A legacy advertisement
+  /// is 31 bytes: 18 for the 128-bit service UUID, 3 for the flags, leaving 10
+  /// for a 2-byte AD header plus the name. Firmware that advertised a longer
+  /// name had it silently relegated to the scan response by the ESP32 BLE
+  /// library — which is why such a device turned up in the scan list as a row
+  /// with no name at all.
+  static const String keyholder = 'KeyGuard';
 
-  /// Advertised once claimed. Deliberately generic — it carries no per-unit
-  /// identifier, so a passer-by cannot single out *this* keyholder (and by
-  /// extension its owner) from a scan. See docs/SECURITY_MODEL.md.
-  static const String claimed = 'KeyGuard';
+  /// What firmware older than the single-name change advertised while unclaimed.
+  ///
+  /// Kept only so those units are still recognised as keyholders; nothing infers
+  /// ownership from it any more. See [BleAdvState].
+  static const String legacyUnclaimed = 'BLE-Keyholder';
 
   /// Names that may be a keyholder, used as a fallback when a device's
   /// advertising packet omits the service UUID.
-  static const List<String> candidates = [unclaimed, claimed];
+  static const List<String> candidates = [keyholder, legacyUnclaimed];
+}
+
+/// Claim state, advertised as one byte of service data under
+/// [BleUuids.service] in the scan response.
+///
+/// The advertising packet itself is full to the byte, so this rides in the scan
+/// response's separate 31 bytes. It exists because the name no longer changes on
+/// claiming: without it the app could not tell an unclaimed keyholder from
+/// somebody else's before connecting, and would have to offer pairing on a
+/// device that will refuse it.
+///
+/// Absent from the advertisement entirely on firmware that predates it — treat
+/// that as "no information", not as a claim. See `applyAdvertisedIdentity()` in
+/// firmware/keyguard_esp32c3/keyguard_esp32c3.ino.
+class BleAdvState {
+  BleAdvState._();
+
+  static const int unclaimed = 0x00;
+  static const int claimed = 0x01;
 }
 
 /// Commands the app writes to the keyholder.

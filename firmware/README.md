@@ -100,7 +100,10 @@ the display object.
 ## 4. First boot and claiming
 
 1. Flash. The OLED shows `UNCLAIMED / PRESS BTN / TO PAIR` and the device
-   advertises as `BLE-Keyholder`.
+   advertises as `KeyGuard`. The name is the same once claimed — ownership is
+   advertised as a state byte in the scan response, not in the name, because a
+   name long enough to distinguish the two does not fit in the advertising
+   packet beside the service UUID.
 2. Open the app, go to **Scan**, tap **Pair** on the keyholder.
 3. Tap **Pair** in the passkey sheet. A six-digit code appears on the OLED;
    Android asks for it in its own system dialog. Type it there — not into the

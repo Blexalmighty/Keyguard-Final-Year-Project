@@ -135,13 +135,25 @@
 #define CHAR_AUTH_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a9"
 #define CHAR_PROV_UUID "beb5483e-36e1-4688-b7f5-ea07361b26aa"
 
-/* Advertised name. It changes on claiming, and that is a deliberate
- * anti-stalking measure rather than cosmetics: a fixed, distinctive name on a
- * static address lets a stranger passively follow the OWNER around, which is the
- * AirTag stalking problem. "KeyGuard" is generic enough to be uninteresting.
+/* Advertised name. One name in both ownership states, and short on purpose.
+ *
+ * A fixed, distinctive name on a static address lets a stranger passively follow
+ * the OWNER around — the AirTag stalking problem — so the name carries no
+ * per-unit identifier. Claim state used to be encoded in the name itself
+ * ("BLE-Keyholder" when unclaimed); it now rides in the scan response as service
+ * data instead, for two reasons. It keeps the advertised identity constant, and
+ * "BLE-Keyholder" did not fit: 15 bytes of name plus 18 of service UUID plus 3
+ * of flags overruns the 31-byte legacy advertising packet, and the ESP32 BLE
+ * library drops the overflowing field without saying so. "KeyGuard" is 8
+ * characters, which is exactly the budget that remains.
  * Full mitigation needs resolvable private addresses; see docs/SECURITY_MODEL.md */
-#define NAME_UNCLAIMED "BLE-Keyholder"
-#define NAME_CLAIMED   "KeyGuard"
+#define ADV_NAME "KeyGuard"
+
+/* Claim state, advertised as one byte of service data under SERVICE_UUID so the
+ * app can tell an unclaimed keyholder from somebody else's before connecting.
+ * Mirrored in BleAdvFlags in lib/services/ble_protocol.dart. */
+#define ADV_STATE_UNCLAIMED 0x00
+#define ADV_STATE_CLAIMED   0x01
 
 // Commands from the phone
 #define CMD_FIND_KEY   "FIND_KEY"
@@ -1206,22 +1218,36 @@ class ProvCharCallbacks : public BLECharacteristicCallbacks {
  * =========================================================================== */
 
 void applyAdvertisedIdentity() {
-  /* Advertise a neutral name once claimed (anti-stalking, see NAME_CLAIMED).
-   * The GAP name is updated in place rather than by rebooting, so a claim does
+  /* The GAP name is updated in place rather than by rebooting, so a claim does
    * not tear down the connection the app is still using. */
-  const char* name = g_claimed ? NAME_CLAIMED : NAME_UNCLAIMED;
-  esp_ble_gap_set_device_name(name);
+  esp_ble_gap_set_device_name(ADV_NAME);
 
+  /* Advertising packet, 31 bytes to the byte: 3 flags + 18 service UUID + 10
+   * name. There is no room for a thirty-second, and BLEAdvertisementData::addData
+   * discards any field that would overflow without reporting it — so anything
+   * added here silently costs one of the three below. */
   BLEAdvertisementData advertisementData;
-  advertisementData.setName(name);
+  advertisementData.setFlags(0x06);  // LE General Discoverable, BR/EDR unsupported
   // The service UUID must be in the advertisement: the app scans with a service
   // filter so it can find keyholders without inspecting every radio in the room.
   advertisementData.setCompleteServices(BLEUUID(SERVICE_UUID));
+  advertisementData.setName(ADV_NAME);
   pAdvertising->setAdvertisementData(advertisementData);
+
+  /* Claim state goes in the scan response — its own separate 31 bytes — because
+   * the advertisement above has none left. The app needs this before connecting:
+   * an unclaimed keyholder is offered for pairing, somebody else's is not. One
+   * byte under the 128-bit service UUID costs 19 of the 31; the name is repeated
+   * in the remaining 10 so that a scanner reading only this packet still has it. */
+  char state = g_claimed ? ADV_STATE_CLAIMED : ADV_STATE_UNCLAIMED;
+  BLEAdvertisementData scanResponseData;
+  scanResponseData.setServiceData(BLEUUID(SERVICE_UUID), String(&state, 1));
+  scanResponseData.setName(ADV_NAME);
+  pAdvertising->setScanResponseData(scanResponseData);
 }
 
 void setupBle() {
-  BLEDevice::init(g_claimed ? NAME_CLAIMED : NAME_UNCLAIMED);
+  BLEDevice::init(ADV_NAME);
 
   /* CLAIM_OK: plus 64 hex characters is 73 bytes. The default 23-byte ATT MTU
    * carries 20, so the owner key would arrive silently truncated and the
@@ -1275,7 +1301,10 @@ void setupBle() {
   service->start();
 
   pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->addServiceUUID(SERVICE_UUID);
+  /* No addServiceUUID() here: applyAdvertisedIdentity() supplies both packets
+   * verbatim, and a UUID registered this way would only be re-encoded into
+   * whichever packet the library felt like using. setScanResponse must precede
+   * it — it invalidates the cached payload. */
   pAdvertising->setScanResponse(true);
   applyAdvertisedIdentity();
   pAdvertising->start();

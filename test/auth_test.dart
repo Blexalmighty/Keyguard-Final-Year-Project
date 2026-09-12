@@ -318,4 +318,46 @@ void main() {
       expect(BleUuids.provChar, isNot(BleUuids.authChar));
     });
   });
+
+  group('advertising budget', () {
+    // A legacy advertising packet carries 31 bytes, and every AD field inside
+    // it is [length][type][data]. The ESP32 BLE library discards any field that
+    // would overflow, silently — and when the name is what overflows, it is
+    // moved to the scan response, which a phone may never read. The visible
+    // result is a keyholder sitting in the app's scan list as a row with no
+    // name on it, which is exactly the bug this budget exists to prevent.
+    const packetBytes = 31;
+    const flagsField = 3; //             [2][0x01][flags]
+    const serviceUuidField = 2 + 16; //  [17][0x07][128-bit UUID]
+    const adFieldHeader = 2; //          [length][type]
+
+    test('the advertised name fits beside the service UUID', () {
+      final nameField = adFieldHeader + BleNames.keyholder.length;
+
+      expect(
+        flagsField + serviceUuidField + nameField,
+        lessThanOrEqualTo(packetBytes),
+        reason: '"${BleNames.keyholder}" cannot ride in the advertising packet '
+            'alongside the service UUID, so the firmware will move it to the '
+            'scan response and the app will show a nameless device',
+      );
+    });
+
+    test('the name the old firmware advertised is why the rule exists', () {
+      // Not hypothetical: 3 + 18 + 15 = 36, five bytes over, and that overflow
+      // is what produced the nameless keyholder in the first place.
+      final legacyNameField = adFieldHeader + BleNames.legacyUnclaimed.length;
+
+      expect(flagsField + serviceUuidField + legacyNameField,
+          greaterThan(packetBytes));
+    });
+
+    test('claim state is carried out of band, so one name serves both states',
+        () {
+      // The name is identical whether or not the keyholder has an owner — that
+      // is the anti-stalking property — so ownership has to be advertised
+      // separately, as a byte of service data in the scan response.
+      expect(BleAdvState.unclaimed, isNot(BleAdvState.claimed));
+    });
+  });
 }
