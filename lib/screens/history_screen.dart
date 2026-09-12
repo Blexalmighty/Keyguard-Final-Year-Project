@@ -27,10 +27,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final bleService = context.watch<BleService>();
+    // Selected rather than watched. This screen reads exactly one value, but it
+    // lives in an IndexedStack alongside the other three and so stays mounted
+    // whichever tab is showing — watching the whole service meant every RSSI
+    // sample and every scan result re-grouped up to 200 events by day while the
+    // user was looking at a different screen entirely.
+    //
+    // `historyEvents` hands back a fresh unmodifiable view each call, so the
+    // default identity check would always report a change; Selector's built-in
+    // collection comparison walks the elements instead, which for an unchanged
+    // log is 200 identity checks and no rebuild.
+    final all = context.select<BleService, List<EventModel>>(
+      (service) => service.historyEvents,
+    );
     final p = AppPalette.of(context);
 
-    final all = bleService.historyEvents;
     final securityCount = all.where((e) => e.isSecurityEvent).length;
     final events =
         _securityOnly ? all.where((e) => e.isSecurityEvent).toList() : all;

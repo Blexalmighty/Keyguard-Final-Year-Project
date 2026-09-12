@@ -18,6 +18,7 @@ import 'ble_vendors.dart';
 import 'notification_service.dart';
 import 'phone_ringer_service.dart';
 import 'proximity_model.dart';
+import 'scan_list_diff.dart';
 import 'settings_store.dart';
 
 /// Central BLE service: discovery, connection, and the data channel to the
@@ -376,14 +377,14 @@ class BleService extends ChangeNotifier {
   /// indistinguishable from a keyholder that is not there. Ordering does the
   /// filter's real job: keyholders first, then by signal strength, so the thing
   /// the owner is looking for is never buried under a neighbour's television.
-  List<BleDevice> get filteredScannedDevices {
-    final list = List<BleDevice>.from(_scannedDevices);
-    list.sort((a, b) {
-      if (a.isKeyholder != b.isKeyholder) return a.isKeyholder ? -1 : 1;
-      return b.rssi.compareTo(a.rssi);
-    });
-    return list;
-  }
+  ///
+  /// That ordering is applied once in [_rebuildScannedDevices], where the list is
+  /// built, rather than again here. This getter is read during build, and with
+  /// `continuousUpdates` the scan callback fires several times a second, so a
+  /// copy-and-re-sort per frame was paying twice for an order the service had
+  /// already established.
+  List<BleDevice> get filteredScannedDevices =>
+      List.unmodifiable(_scannedDevices);
 
   /// How many keyholders the current scan can see, for the Scan screen counter.
   int get keyholderCount => _scannedDevices.where((d) => d.isKeyholder).length;
@@ -870,6 +871,29 @@ class BleService extends ChangeNotifier {
         if (a.isKeyholder != b.isKeyholder) return a.isKeyholder ? -1 : 1;
         return b.rssi.compareTo(a.rssi);
       });
+
+    // Only notify when the list the user can see actually changed.
+    //
+    // `continuousUpdates` means this runs several times a second for the whole
+    // length of a scan, and most of those passes differ only by a dBm or two on
+    // a device nobody is looking at. Rebuilding the scan list for that is work
+    // with no visible result, and it was happening while the radar animation was
+    // trying to hold 60fps.
+    //
+    // Small RSSI movement is deliberately ignored: the bars and the distance
+    // estimate are already smoothed, so a 1 dBm flicker cannot change what is
+    // drawn.
+    //
+    // When nothing material changed the *displayed* list is deliberately left
+    // in place rather than quietly replaced. Comparing each sample against what
+    // is on screen makes this a deadband: a slow one-dBm-at-a-time drift
+    // accumulates against the displayed value and does eventually cross the
+    // threshold. Adopting the new list each time would reset the comparison on
+    // every sample, and a device sliding steadily out of range would never
+    // trigger a repaint at all. `_discovered` holds the fresh data either way,
+    // so nothing is lost.
+    if (!scanListChanged(_scannedDevices, list)) return;
+
     _scannedDevices = list;
     notifyListeners();
   }

@@ -87,24 +87,36 @@ class KeyGuardApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bleService = context.watch<BleService>();
-
-    return MaterialApp(
-      title: 'KeyGuard BLE',
-      debugShowCheckedModeBanner: false,
-      // Both themes are built from AppPalette, so a screen never has to ask
-      // which one is active. The inline `ColorScheme.fromSeed` pair that used to
-      // live here generated its own surface ramp, which is why dark mode came
-      // out with tones nothing in the design system knew about.
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      themeMode: bleService.darkModeEnabled ? ThemeMode.dark : ThemeMode.light,
-      // Not `Duration.zero`: MaterialApp cross-fades between light and dark over
-      // this window, and because AppPalette is a lerp-able ThemeExtension every
-      // custom surface fades with it rather than snapping a frame later.
-      themeAnimationDuration: AppMotion.slow,
-      themeAnimationCurve: AppMotion.standard,
-      home: const MainNavigation(),
+    // `Selector`, not `watch<BleService>()`.
+    //
+    // This widget reads exactly one bool, but watching the whole service made it
+    // a listener of all 60-odd `notifyListeners()` calls in it — including the
+    // RSSI poll every two seconds and every batch of scan results, which arrive
+    // several times a second while hunting. Each one rebuilt `MaterialApp`, and
+    // therefore `MainNavigation` and all four screens in its IndexedStack, to
+    // produce an identical frame.
+    //
+    // Selector rebuilds only when the selected value actually changes, so the
+    // theme still flips instantly while a scan no longer drives the whole app.
+    return Selector<BleService, bool>(
+      selector: (_, service) => service.darkModeEnabled,
+      builder: (context, darkMode, _) => MaterialApp(
+        title: 'KeyGuard BLE',
+        debugShowCheckedModeBanner: false,
+        // Both themes are built from AppPalette, so a screen never has to ask
+        // which one is active. The inline `ColorScheme.fromSeed` pair that used to
+        // live here generated its own surface ramp, which is why dark mode came
+        // out with tones nothing in the design system knew about.
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
+        themeMode: darkMode ? ThemeMode.dark : ThemeMode.light,
+        // Not `Duration.zero`: MaterialApp cross-fades between light and dark over
+        // this window, and because AppPalette is a lerp-able ThemeExtension every
+        // custom surface fades with it rather than snapping a frame later.
+        themeAnimationDuration: AppMotion.slow,
+        themeAnimationCurve: AppMotion.standard,
+        home: const MainNavigation(),
+      ),
     );
   }
 }
