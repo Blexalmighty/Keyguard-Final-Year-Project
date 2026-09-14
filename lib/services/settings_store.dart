@@ -1,5 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/alert_distances.dart';
 import '../models/alert_pattern.dart';
 import '../models/history_retention.dart';
 import '../models/phone_alert_tone.dart';
@@ -31,6 +32,7 @@ class SettingsStore {
   static const String _kDarkMode = 'dark_mode_enabled';
   static const String _kDemoMode = 'demo_mode_enabled';
   static const String _kAlertDistance = 'alert_distance_threshold';
+  static const String _kMaxAllowance = 'max_allowance_distance';
   static const String _kTxPower = 'rssi_tx_power';
   static const String _kPathLoss = 'rssi_path_loss_exponent';
   static const String _kHistory = 'history_events_json';
@@ -121,6 +123,17 @@ class SettingsStore {
       _prefs.getDouble(_kAlertDistance) ?? 2.0;
   Future<void> setAlertDistanceThreshold(double v) =>
       _prefs.setDouble(_kAlertDistance, v);
+
+  /// The outer boundary, beyond the alert distance.
+  ///
+  /// Defaults to [kDefaultMaxAllowance] rather than to the alert distance, so
+  /// the escalation exists on a fresh install without the owner having to
+  /// discover the setting. `BleService` clamps it to at least the alert
+  /// distance, which is the invariant that keeps the three boundaries in order.
+  double get maxAllowanceDistance =>
+      _prefs.getDouble(_kMaxAllowance) ?? kDefaultMaxAllowance;
+  Future<void> setMaxAllowanceDistance(double v) =>
+      _prefs.setDouble(_kMaxAllowance, v);
 
   // --- RSSI calibration (see ProximityModel) ---
 

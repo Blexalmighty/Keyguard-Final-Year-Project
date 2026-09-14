@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/ble_device.dart';
 import '../services/ble_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/maps_launcher.dart';
 import '../widgets/app_logo_tile.dart';
 import '../widgets/battery_pill.dart';
 import '../widgets/map_painter.dart';
@@ -482,11 +483,18 @@ class _LocationCard extends StatelessWidget {
 
             AppSwap(
               child: bleService.hasGpsFix
-                  ? MapPreviewWidget(
+                  // Tappable, because what is below is a diagram and not a
+                  // street map. The tap hands the coordinates to Google Maps,
+                  // where the owner gets the real map, directions and a share
+                  // button — none of which an in-app thumbnail could offer.
+                  ? InkWell(
                       key: const ValueKey('map'),
-                      locationName: bleService.locationName,
-                      coordinates: bleService.coordinatesFormatted,
-                      height: 150,
+                      onTap: () => _openInMaps(context, bleService),
+                      child: MapPreviewWidget(
+                        locationName: bleService.locationName,
+                        coordinates: bleService.coordinatesFormatted,
+                        height: 150,
+                      ),
                     )
                   : Container(
                       key: const ValueKey('nofix'),
@@ -513,34 +521,115 @@ class _LocationCard extends StatelessWidget {
               padding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
               color: p.surfaceAlt,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(
-                      bleService.hasGpsFix
-                          ? bleService.locationName
-                          : 'Waiting for GPS fix…',
-                      style: AppTypography.bodyMd(color: p.onSurface),
-                      overflow: TextOverflow.ellipsis,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          bleService.hasGpsFix
+                              ? bleService.locationName
+                              : 'Waiting for GPS fix…',
+                          style: AppTypography.bodyMd(color: p.onSurface),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        bleService.hasGpsFix
+                            ? bleService.coordinatesFormatted
+                            : '--',
+                        // The coordinate pair is measured data, so it takes the
+                        // accent — matching the pin and the crosshair in the
+                        // diagram above it.
+                        style: AppTypography.metadataMono(
+                            color: bleService.hasGpsFix ? p.accent : p.muted),
+                      ),
+                    ],
+                  ),
+
+                  // The phone's network address, under the position it was
+                  // recorded at. It corroborates the fix: the address is what a
+                  // server sees, so it places the phone on a network at roughly
+                  // the same moment the coordinates place it on the ground.
+                  // Hidden entirely until one is known rather than shown as a
+                  // dash — an empty labelled row here would look like a bug.
+                  if (bleService.networkAddress != null) ...[
+                    const SizedBox(height: 7),
+                    Divider(color: p.border, height: 1),
+                    const SizedBox(height: 7),
+                    Row(
+                      children: [
+                        Icon(
+                          bleService.networkAddressIsPublic
+                              ? Icons.public_rounded
+                              : Icons.router_rounded,
+                          size: 14,
+                          color: p.muted,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          // Labelled, because the two are not interchangeable: a
+                          // 192.168.x.x address says nothing about where the
+                          // phone is, and presenting it as the phone's address on
+                          // the internet would be quietly false.
+                          bleService.networkAddressIsPublic
+                              ? 'Public IP'
+                              : 'Local IP',
+                          style: AppTypography.microLabel(color: p.muted),
+                        ),
+                        const Spacer(),
+                        Text(
+                          bleService.networkAddress!,
+                          style: AppTypography.metadataMono(color: p.muted),
+                        ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    bleService.hasGpsFix
-                        ? bleService.coordinatesFormatted
-                        : '--',
-                    // The coordinate pair is measured data, so it takes the accent
-                    // — matching the pin and the crosshair in the diagram above it.
-                    style: AppTypography.metadataMono(
-                        color: bleService.hasGpsFix ? p.accent : p.muted),
-                  ),
+                  ],
+
+                  if (bleService.hasGpsFix) ...[
+                    const SizedBox(height: 7),
+                    Row(
+                      children: [
+                        Icon(Icons.open_in_new_rounded,
+                            size: 13, color: p.primary),
+                        const SizedBox(width: 6),
+                        Text('Tap the map to open in Google Maps',
+                            style: AppTypography.microLabel(color: p.primary)),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// Hands the last known position to the phone's maps app.
+  ///
+  /// The failure is reported rather than swallowed. A tap that does nothing is
+  /// indistinguishable from a broken card, and on a phone with neither a maps
+  /// app nor a browser this genuinely cannot succeed.
+  Future<void> _openInMaps(BuildContext context, BleService service) async {
+    final lat = double.tryParse(service.lastLat);
+    final lng = double.tryParse(service.lastLng);
+    if (lat == null || lng == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final opened = await openInMaps(
+      latitude: lat,
+      longitude: lng,
+      label: service.displayName,
+    );
+    if (opened) return;
+
+    messenger.showSnackBar(
+      const SnackBar(content: Text('No app on this phone can open a map.')),
     );
   }
 }

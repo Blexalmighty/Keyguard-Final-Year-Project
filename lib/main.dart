@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/ble_service.dart';
+import 'services/network_info_service.dart';
 import 'services/notification_service.dart';
 import 'services/owner_identity.dart';
 import 'services/pairing_service.dart';
+import 'services/phone_location_service.dart';
 import 'services/phone_ringer_service.dart';
 import 'screens/home_screen.dart';
 import 'screens/scan_screen.dart';
@@ -48,15 +50,28 @@ class KeyGuardProviders extends StatelessWidget {
           create: (_) => NotificationService()..init(),
         ),
 
-        // `ChangeNotifierProxyProvider` only so `update` can inject the ringer
-        // and the notifier. The BleService instance itself is created once and
-        // never replaced.
-        ChangeNotifierProxyProvider2<PhoneRingerService, NotificationService,
-            BleService>(
+        // Not a ChangeNotifier either. The phone's receiver is polled on demand
+        // by BleService rather than streamed to the UI: a continuous position
+        // stream would hold the GPS on all day for the sake of a screen that
+        // only needs a position at the moment the link changes.
+        Provider<PhoneLocationService>(create: (_) => PhoneLocationService()),
+
+        // Reads the phone's IP address for the last-known-location card. Not a
+        // ChangeNotifier for the same reason: it is polled on attach and on
+        // connectivity changes, not streamed.
+        Provider<NetworkInfoService>(create: (_) => NetworkInfoService()),
+
+        // `ChangeNotifierProxyProvider` only so `update` can inject the ringer,
+        // the notifier, the phone's location and its network address. The
+        // BleService instance itself is created once and never replaced.
+        ChangeNotifierProxyProvider4<PhoneRingerService, NotificationService,
+            PhoneLocationService, NetworkInfoService, BleService>(
           create: (_) => BleService(),
-          update: (_, ringer, notifications, ble) => ble!
+          update: (_, ringer, notifications, location, network, ble) => ble!
             ..attachRinger(ringer)
-            ..attachNotifications(notifications),
+            ..attachNotifications(notifications)
+            ..attachPhoneLocation(location)
+            ..attachNetworkInfo(network),
         ),
 
         // One instance for the whole app: it caches the owner id so the pairing

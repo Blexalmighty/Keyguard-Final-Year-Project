@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../models/alert_distances.dart';
 import '../models/alert_pattern.dart';
 import '../models/ble_device.dart';
 import '../models/event_model.dart';
@@ -15,7 +16,9 @@ import '../models/history_retention.dart';
 import '../utils/coordinate_format.dart';
 import 'ble_protocol.dart';
 import 'ble_vendors.dart';
+import 'network_info_service.dart';
 import 'notification_service.dart';
+import 'phone_location_service.dart';
 import 'phone_ringer_service.dart';
 import 'proximity_model.dart';
 import 'scan_list_diff.dart';
@@ -172,6 +175,103 @@ class BleService extends ChangeNotifier {
   /// frame, which meant the app confidently mislabelled every position.
   String _locationName = '';
 
+  /// The phone's own receiver, which has replaced the keyholder's GPS module as
+  /// the source of positions.
+  ///
+  /// The keyholder's receiver could only be read over a live BLE link, so at the
+  /// one moment a position is worth having — the link dropping — there was no
+  /// way to ask for it and the event was stamped with a stale reading. The phone
+  /// is available then. Injected and nullable for the same reason as the ringer
+  /// and the notifications: a protocol test should not have to stand up a
+  /// platform location channel.
+  PhoneLocationService? _phoneLocation;
+
+  void attachPhoneLocation(PhoneLocationService location) {
+    if (identical(_phoneLocation, location)) return;
+    _phoneLocation = location;
+    // Warms the cache at startup so the first event of the session — very often
+    // an auto-connect that happens before the owner has even opened the app —
+    // has a position to be stamped with.
+    unawaited(_refreshPhoneFix());
+  }
+
+  /// The phone's location service, for the UI. Null until attached.
+  PhoneLocationService? get phoneLocation => _phoneLocation;
+
+  /// The phone's network addresses, shown beside the last known position.
+  ///
+  /// Injected and nullable like the rest. Held here rather than read directly by
+  /// the Home screen so that the address survives a tab switch — a
+  /// `StatefulWidget` in an `IndexedStack` would keep it too, but a rebuild from
+  /// any other cause would re-run the lookup, and this is a network request.
+  NetworkInfoService? _networkInfo;
+
+  void attachNetworkInfo(NetworkInfoService info) {
+    if (identical(_networkInfo, info)) return;
+    _networkInfo = info;
+    unawaited(refreshNetworkAddress());
+  }
+
+  /// The address to show: the public one when a lookup has succeeded, otherwise
+  /// the local one. Null when neither is known yet.
+  String? get networkAddress => _networkInfo?.cachedAddress;
+
+  /// True when [networkAddress] is the public address rather than the local one,
+  /// so the label can say which it is. Showing a LAN address as though it were
+  /// the phone's internet address would be quietly wrong.
+  bool get networkAddressIsPublic =>
+      _networkInfo?.cachedAddressIsPublic ?? false;
+
+  /// Re-reads the phone's addresses.
+  ///
+  /// Called on attach and whenever connectivity changes, since a public address
+  /// only becomes readable once there is a route to read it over and changes
+  /// when the phone moves between networks.
+  Future<void> refreshNetworkAddress() async {
+    final info = _networkInfo;
+    if (info == null) return;
+    final before = info.cachedAddress;
+    await info.refresh();
+    if (info.cachedAddress != before) notifyListeners();
+  }
+
+  /// Pulls a fresh position from the phone and publishes it as the last known
+  /// location.
+  ///
+  /// Returns the fix, or null if the receiver could not produce one.
+  Future<PhoneFix?> _refreshPhoneFix() async {
+    final service = _phoneLocation;
+    if (service == null) return null;
+    final fix = await service.refresh();
+    if (fix != null) _adoptPhoneFix(fix);
+    return fix;
+  }
+
+  /// Publishes [fix] as the app's current position.
+  ///
+  /// Returns true when something actually moved, so callers can decide whether a
+  /// rebuild is worth it. Split from [_adoptPhoneFix] because [_logEvent]
+  /// notifies once at the end anyway and a second notification for the same
+  /// frame would rebuild the History screen twice.
+  bool _applyPhoneFix(PhoneFix fix) {
+    final lat = fix.latitudeText;
+    final lng = fix.longitudeText;
+    if (lat == _lastLat && lng == _lastLng && _hasGpsFix) return false;
+
+    // A cached place name belongs to the previous coordinates.
+    if (lat != _lastLat || lng != _lastLng) _locationName = '';
+
+    _lastLat = lat;
+    _lastLng = lng;
+    _hasGpsFix = true;
+    return true;
+  }
+
+  /// Publishes [fix] as the app's current position and rebuilds.
+  void _adoptPhoneFix(PhoneFix fix) {
+    if (_applyPhoneFix(fix)) notifyListeners();
+  }
+
   // ---------------------------------------------------------------------------
   // Scanning state
   // ---------------------------------------------------------------------------
@@ -233,6 +333,9 @@ class BleService extends ChangeNotifier {
   /// moments and each notice has to fire exactly once per departure.
   bool _outOfRangeWarned = false;
 
+  /// And the same again for the maximum allowance, the outermost boundary.
+  bool _maxAllowanceWarned = false;
+
   bool _proximityWarningEnabled = true;
 
   // ---------------------------------------------------------------------------
@@ -252,6 +355,16 @@ class BleService extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   double _alertDistanceThreshold = 2.0;
+
+  /// The outer boundary: how far the keyholder may get before the app treats it
+  /// as gone rather than merely wandering.
+  ///
+  /// Always at or above [_alertDistanceThreshold] — see [maxAllowanceDistance],
+  /// which enforces that on read so a stored pair that has fallen out of order
+  /// (an old install where the alert distance was raised past the allowance)
+  /// cannot produce a boundary that fires before the one inside it.
+  double _maxAllowanceDistance = kDefaultMaxAllowance;
+
   bool _alertSoundEnabled = true;
 
   /// The buzzer cadence. See [AlertPattern] for why this is a rhythm rather than
@@ -403,6 +516,29 @@ class BleService extends ChangeNotifier {
       'this only widens where its last position can reach you.';
 
   double get alertDistanceThreshold => _alertDistanceThreshold;
+
+  /// The maximum allowance, never reported as closer than the alert distance.
+  ///
+  /// Clamped here rather than only on write, because the alert distance can be
+  /// raised after the allowance was set. Without this an owner who moved the
+  /// alert distance to 8 m while the allowance sat at 4 m would have an outer
+  /// boundary *inside* the inner one, and the "gone too far" notice would fire
+  /// before the "out of range" notice it is supposed to escalate from.
+  double get maxAllowanceDistance =>
+      _maxAllowanceDistance < _alertDistanceThreshold
+          ? _alertDistanceThreshold
+          : _maxAllowanceDistance;
+
+  /// True when the allowance is far enough beyond the alert distance to be a
+  /// separate event worth notifying about.
+  ///
+  /// At or very near the alert distance the two boundaries would be crossed in
+  /// the same RSSI sample and the owner would get two notifications for one
+  /// departure. Half a metre of separation is the point at which the escalation
+  /// means something.
+  bool get maxAllowanceActive =>
+      maxAllowanceDistance >= _alertDistanceThreshold + 0.5;
+
   bool get alertSoundEnabled => _alertSoundEnabled;
   AlertPattern get alertPattern => _alertPattern;
   bool get saveGpsOnDisconnect => _saveGpsOnDisconnect;
@@ -443,6 +579,7 @@ class BleService extends ChangeNotifier {
       _settings = store;
 
       _alertDistanceThreshold = store.alertDistanceThreshold;
+      _maxAllowanceDistance = store.maxAllowanceDistance;
       _alertSoundEnabled = store.alertSoundEnabled;
       _alertPattern = store.alertPattern;
       _saveGpsOnDisconnect = store.saveGpsOnDisconnect;
@@ -617,6 +754,12 @@ class BleService extends ChangeNotifier {
             r == ConnectivityResult.mobile ||
             r == ConnectivityResult.ethernet);
         notifyListeners();
+
+        // The phone's public address depends on which network it is on, so a
+        // connectivity change is exactly when it needs re-reading. Also the only
+        // chance to read it at all if the app started with no route: the lookup
+        // on attach would have failed and there is nothing else to retry it.
+        if (_hasInternet) unawaited(refreshNetworkAddress());
       });
     } catch (e) {
       debugPrint('BleService: connectivity listener error: $e');
@@ -1044,6 +1187,7 @@ class BleService extends ChangeNotifier {
       endContinuousScan();
       _proximityWarned = false;
       _outOfRangeWarned = false;
+      _maxAllowanceWarned = false;
 
       _knownDeviceId = _deviceId;
       await _settings?.setLastDevice(_deviceId, _deviceName);
@@ -1344,8 +1488,10 @@ class BleService extends ChangeNotifier {
     // that number is a guess about where the keys were, not where they are.
     _proximityWarned = false;
     _outOfRangeWarned = false;
+    _maxAllowanceWarned = false;
     unawaited(_notifications?.cancelProximityWarning() ?? Future.value());
     unawaited(_notifications?.cancelOutOfRange() ?? Future.value());
+    unawaited(_notifications?.cancelMaxAllowanceExceeded() ?? Future.value());
 
     // Start hunting immediately. A disconnect while the app is open almost
     // always means the owner has walked out of range of their keys, so this is
@@ -1415,6 +1561,10 @@ class BleService extends ChangeNotifier {
   /// Each fires once per departure. Without the latches this would notify on
   /// every two-second RSSI sample for as long as the owner stood near a
   /// boundary — and RSSI is noisy enough that they would not even have to move.
+  ///
+  /// A third boundary, the owner's maximum allowance, is handled at the end by
+  /// [_evaluateMaxAllowance]. It sits behind the same enable flag as the other
+  /// two: it is an escalation of this warning, not a separate feature.
   void _evaluateProximityWarning() {
     if (!_proximityWarningEnabled) return;
     final d = _estimatedDistance;
@@ -1446,9 +1596,7 @@ class BleService extends ChangeNotifier {
         _outOfRangeWarned = false;
         unawaited(_notifications?.cancelOutOfRange() ?? Future.value());
       }
-      return;
-    }
-    if (d >= _alertDistanceThreshold) {
+    } else if (d >= _alertDistanceThreshold) {
       _outOfRangeWarned = true;
       unawaited(
         _notifications?.showOutOfRange(
@@ -1459,6 +1607,52 @@ class BleService extends ChangeNotifier {
             Future.value(),
       );
     }
+
+    // The maximum allowance, the last of the three. Evaluated after the
+    // out-of-range check rather than instead of it — this used to `return` once
+    // the threshold latch was handled, which would have made the allowance
+    // unreachable — so a keyholder that goes straight past both boundaries in
+    // one sample produces both notices, in the right order.
+    _evaluateMaxAllowance(d);
+  }
+
+  /// The outermost boundary: the keyholder is further away than the owner said
+  /// it should ever be.
+  ///
+  /// Does one thing the inner boundaries do not — it records the crossing in
+  /// History, with the phone's position. This is the moment that answers "where
+  /// was it when I lost it", and unlike a disconnect it happens while the link
+  /// is still up, so the distance on that row is measured rather than inferred
+  /// from the last reading before the link died.
+  void _evaluateMaxAllowance(double d) {
+    if (!maxAllowanceActive) return;
+    final limit = maxAllowanceDistance;
+
+    if (_maxAllowanceWarned) {
+      if (d < limit * 0.75) {
+        _maxAllowanceWarned = false;
+        unawaited(
+          _notifications?.cancelMaxAllowanceExceeded() ?? Future.value(),
+        );
+      }
+      return;
+    }
+    if (d < limit) return;
+
+    _maxAllowanceWarned = true;
+    unawaited(
+      _notifications?.showMaxAllowanceExceeded(
+            deviceName: displayName,
+            distanceMetres: d,
+            allowanceMetres: limit,
+          ) ??
+          Future.value(),
+    );
+    // Logged as a security event so it lands in both History and the Security
+    // tab. `_logEvent` stamps it with the phone's position and then refines it,
+    // which is the whole point of recording it here rather than waiting for the
+    // disconnect that may follow minutes later and streets away.
+    _logEvent(EventType.maxAllowanceExceeded);
   }
 
   bool get proximityWarningEnabled => _proximityWarningEnabled;
@@ -1468,8 +1662,10 @@ class BleService extends ChangeNotifier {
     if (!value) {
       _proximityWarned = false;
       _outOfRangeWarned = false;
+      _maxAllowanceWarned = false;
       unawaited(_notifications?.cancelProximityWarning() ?? Future.value());
       unawaited(_notifications?.cancelOutOfRange() ?? Future.value());
+      unawaited(_notifications?.cancelMaxAllowanceExceeded() ?? Future.value());
     }
     await _settings?.setProximityWarningEnabled(value);
     // The warning is a system notification. Android 13+ asks before an app may
@@ -1739,8 +1935,20 @@ class BleService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Refreshes the last known position.
+  ///
+  /// This used to be `_write(BleCommands.getLoc)` — a request to the
+  /// keyholder's own GPS module. That only worked while there was a link to ask
+  /// over, which made it useless at the moment it mattered most, and it made the
+  /// map depend on satellites reaching a device that is typically in a pocket or
+  /// a bag. It now reads the phone's receiver instead.
+  ///
+  /// The keyholder is still asked as well when there is a link, so a unit that
+  /// does have a module keeps contributing — [_applyLocation] accepts whatever
+  /// comes back. Its answer is not waited for.
   Future<void> requestLocation() async {
-    await _write(BleCommands.getLoc);
+    if (_isConnected) unawaited(_write(BleCommands.getLoc));
+    await _refreshPhoneFix();
   }
 
   /// Silences the phone after the keyholder's button rang it.
@@ -1840,11 +2048,19 @@ class BleService extends ChangeNotifier {
   // ===========================================================================
 
   void _logEvent(EventType type, {bool includeLocation = true}) {
+    // The phone's cache first, then whatever the keyholder last reported. The
+    // phone is the primary source now, but a cached reading can be up to two
+    // minutes old, and if the keyholder does have a module its `LOC:` frame may
+    // well be newer.
+    final cached = includeLocation ? _phoneLocation?.usableCachedFix : null;
+    if (cached != null) _applyPhoneFix(cached);
+
     final useLocation = includeLocation && _hasGpsFix;
+    final id = 'ev_${DateTime.now().microsecondsSinceEpoch}';
     _historyEvents.insert(
       0,
       EventModel(
-        id: 'ev_${DateTime.now().microsecondsSinceEpoch}',
+        id: id,
         type: type,
         latitude: useLocation ? _lastLat : '',
         longitude: useLocation ? _lastLng : '',
@@ -1866,6 +2082,52 @@ class BleService extends ChangeNotifier {
     _pruneHistory();
     unawaited(_persistHistory());
     notifyListeners();
+
+    // The row is already in the list; now go and get a better position for it.
+    // Deliberately after the insert and not awaited: a fresh high-accuracy fix
+    // takes seconds, and a disconnect logged seconds late is a disconnect the
+    // owner has already walked away from. Worse, the app is often being pushed
+    // into the background at that exact moment, so an event that waits for
+    // satellites is an event that may never be written at all.
+    if (includeLocation) unawaited(_refinePosition(id));
+  }
+
+  /// Replaces the coordinates on an already-logged event with an accurate fix.
+  ///
+  /// Matched by id rather than by index, because anything may have been inserted
+  /// above the row in the seconds this takes. A row that has since been pruned
+  /// or pushed off the end of the log is simply left alone.
+  Future<void> _refinePosition(String eventId) async {
+    final service = _phoneLocation;
+    if (service == null) return;
+
+    final fix = await service.refresh();
+    if (fix == null) return;
+
+    final moved = _applyPhoneFix(fix);
+
+    final index = _historyEvents.indexWhere((e) => e.id == eventId);
+    if (index < 0) {
+      if (moved) notifyListeners();
+      return;
+    }
+
+    final event = _historyEvents[index];
+    if (event.latitude == fix.latitudeText &&
+        event.longitude == fix.longitudeText) {
+      if (moved) notifyListeners();
+      return;
+    }
+
+    _historyEvents[index] = event.copyWith(
+      latitude: fix.latitudeText,
+      longitude: fix.longitudeText,
+      // The name, if there ever was one, described the coordinates being
+      // replaced.
+      clearLocationName: true,
+    );
+    unawaited(_persistHistory());
+    notifyListeners();
   }
 
   /// Records a security decision in the log. Called by the pairing service.
@@ -1883,8 +2145,31 @@ class BleService extends ChangeNotifier {
 
   Future<void> setAlertDistanceThreshold(double value) async {
     _alertDistanceThreshold = value;
+    // Moving the inner boundary can invalidate an already-fired outer one. If
+    // the owner raises the alert distance past where the keyholder currently is,
+    // the allowance latch should not stay stuck on from the previous departure.
+    if (value > maxAllowanceDistance) _maxAllowanceWarned = false;
     notifyListeners();
     await _settings?.setAlertDistanceThreshold(value);
+  }
+
+  /// Sets the outer boundary — how far the keyholder may get before the app
+  /// treats it as gone rather than wandering.
+  ///
+  /// Not clamped on the way in. The stored value is kept exactly as the owner
+  /// set it and [maxAllowanceDistance] applies the floor on read, so lowering
+  /// the alert distance again restores the allowance the owner originally chose
+  /// rather than leaving it permanently flattened to whatever the alert distance
+  /// happened to be at the time.
+  Future<void> setMaxAllowanceDistance(double value) async {
+    if (_maxAllowanceDistance == value) return;
+    _maxAllowanceDistance = value;
+    // Re-armed, so raising the limit does not leave a notice latched from a
+    // boundary that is now further away than the keyholder is.
+    _maxAllowanceWarned = false;
+    unawaited(_notifications?.cancelMaxAllowanceExceeded() ?? Future.value());
+    notifyListeners();
+    await _settings?.setMaxAllowanceDistance(value);
   }
 
   Future<void> setAlertSoundEnabled(bool value) async {

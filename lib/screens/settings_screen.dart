@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../build_info.dart';
+import '../models/alert_distances.dart';
 import '../models/alert_pattern.dart';
 import '../models/history_retention.dart';
 import '../models/phone_alert_tone.dart';
@@ -388,11 +389,52 @@ class _ThresholdCard extends StatelessWidget {
               style: AppTypography.bodyMd(color: p.muted)),
           Slider(
             value: bleService.alertDistanceThreshold,
-            min: 1.0,
-            max: 10.0,
+            min: kMinAlertDistance,
+            max: kMaxAlertDistance,
             divisions: 18,
             label: '${bleService.alertDistanceThreshold.toStringAsFixed(1)} m',
             onChanged: bleService.setAlertDistanceThreshold,
+          ),
+
+          // The outer boundary. Below the alert distance rather than above it,
+          // because it only means anything in relation to the number above —
+          // reading them the other way round would present a limit before the
+          // threshold it is a limit on.
+          const SizedBox(height: 4),
+          Divider(color: p.border, height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Maximum Allowance',
+                  style: AppTypography.bodyLg(color: p.onSurface)),
+              Text('${bleService.maxAllowanceDistance.toStringAsFixed(1)} m',
+                  style: AppTypography.numeric(color: p.danger, fontSize: 20)),
+            ],
+          ),
+          Text(
+            bleService.maxAllowanceActive
+                ? 'The distance your keyholder should never pass. Going beyond '
+                    'it raises a louder alert and saves where it was.'
+                : 'Set this further out than the threshold above to get a '
+                    'second, louder alert when your keyholder goes too far.',
+            style: AppTypography.bodyMd(color: p.muted),
+          ),
+          Slider(
+            value: bleService.maxAllowanceDistance,
+            // Starts at the alert distance, so the slider cannot be dragged
+            // into a position that contradicts the one above it. It is also why
+            // `maxAllowanceDistance` clamps on read: raising the threshold past
+            // a stored allowance would otherwise leave the value below `min`,
+            // which Slider asserts on rather than clamping.
+            min: bleService.alertDistanceThreshold,
+            max: kMaxAllowanceCeiling,
+            divisions: (kMaxAllowanceCeiling -
+                    bleService.alertDistanceThreshold)
+                .round()
+                .clamp(1, 60),
+            label: '${bleService.maxAllowanceDistance.toStringAsFixed(1)} m',
+            activeColor: p.danger,
+            onChanged: bleService.setMaxAllowanceDistance,
           ),
           // The halfway warning, next to the distance it halves. Off by default
           // in the sense that it is the user's first choice to make: a phone

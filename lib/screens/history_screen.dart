@@ -428,6 +428,12 @@ class _TimelineItem extends StatelessWidget {
                   context,
                   locationTitle: event.displayLocation,
                   coordinates: event.coordinatesFormatted,
+                  // Parsed rather than passed as the stored strings so the sheet
+                  // can hand the point to the Maps app. `hasLocation` has
+                  // already vetted them, so these parse; `tryParse` is here so a
+                  // row written by an older build cannot throw on a tap.
+                  latitude: double.tryParse(event.latitude),
+                  longitude: double.tryParse(event.longitude),
                 )
             : null,
         // Intrinsic height so the connector in the gutter can stretch to whatever

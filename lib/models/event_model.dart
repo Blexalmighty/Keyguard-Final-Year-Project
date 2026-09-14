@@ -18,6 +18,13 @@ enum EventType {
   ownershipReleased,
   intruderBlocked,
   wifiProvisioned,
+
+  /// The keyholder passed the owner's maximum allowance while still connected.
+  ///
+  /// Recorded rather than only notified, because it is the last position
+  /// measured over a live link before the keyholder leaves. A disconnect row can
+  /// be minutes and streets later; this one is the real "where it went" answer.
+  maxAllowanceExceeded,
 }
 
 class EventModel {
@@ -59,6 +66,37 @@ class EventModel {
     this.deviceName,
   });
 
+  /// Returns a copy with the given fields replaced.
+  ///
+  /// Exists for the GPS refinement pass. An event is logged the instant it
+  /// happens, with whatever cached position is to hand, because a disconnect row
+  /// that waits for satellites is a row that appears well after the event or not
+  /// at all. The accurate fix lands a few seconds later and replaces the
+  /// coordinates on the row already in the list, found by [id].
+  ///
+  /// [clearLocationName] exists because a null argument cannot mean "remove it"
+  /// here — `locationName ?? this.locationName` would keep the old value. New
+  /// coordinates invalidate the name that described the old ones, so the caller
+  /// needs a way to say so.
+  EventModel copyWith({
+    String? latitude,
+    String? longitude,
+    String? locationName,
+    bool clearLocationName = false,
+    String? deviceName,
+  }) =>
+      EventModel(
+        id: id,
+        type: type,
+        latitude: latitude ?? this.latitude,
+        longitude: longitude ?? this.longitude,
+        timestamp: timestamp,
+        bleConnected: bleConnected,
+        locationName:
+            clearLocationName ? null : (locationName ?? this.locationName),
+        deviceName: deviceName ?? this.deviceName,
+      );
+
   String get typeString {
     switch (type) {
       case EventType.connected:
@@ -77,6 +115,8 @@ class EventModel {
         return 'intruder_blocked';
       case EventType.wifiProvisioned:
         return 'wifi_provisioned';
+      case EventType.maxAllowanceExceeded:
+        return 'max_allowance_exceeded';
     }
   }
 
@@ -96,6 +136,8 @@ class EventModel {
         return EventType.intruderBlocked;
       case 'wifi_provisioned':
         return EventType.wifiProvisioned;
+      case 'max_allowance_exceeded':
+        return EventType.maxAllowanceExceeded;
       case 'connected':
       default:
         return EventType.connected;
@@ -120,6 +162,8 @@ class EventModel {
         return 'Unauthorised pairing blocked';
       case EventType.wifiProvisioned:
         return 'Wi-Fi credentials sent';
+      case EventType.maxAllowanceExceeded:
+        return 'Went past your limit';
     }
   }
 
@@ -138,6 +182,7 @@ class EventModel {
         return p.success;
       case EventType.disconnected:
       case EventType.intruderBlocked:
+      case EventType.maxAllowanceExceeded:
         return p.danger;
       case EventType.ownershipReleased:
         return p.warning;
@@ -156,6 +201,7 @@ class EventModel {
         return p.successSoft;
       case EventType.disconnected:
       case EventType.intruderBlocked:
+      case EventType.maxAllowanceExceeded:
         return p.dangerSoft;
       case EventType.ownershipReleased:
         return p.warningSoft;
@@ -184,6 +230,8 @@ class EventModel {
         return Icons.gpp_bad_rounded;
       case EventType.wifiProvisioned:
         return Icons.wifi_password_rounded;
+      case EventType.maxAllowanceExceeded:
+        return Icons.social_distance_rounded;
     }
   }
 
@@ -202,7 +250,8 @@ class EventModel {
       type == EventType.wifiProvisioned ||
       type == EventType.phonePingedKey ||
       type == EventType.keyPingedPhone ||
-      type == EventType.disconnected;
+      type == EventType.disconnected ||
+      type == EventType.maxAllowanceExceeded;
 
   /// True when this row can name the keyholder it happened to.
   bool get hasDeviceName =>
@@ -215,6 +264,7 @@ class EventModel {
     if (name.isEmpty) return '';
     switch (type) {
       case EventType.disconnected:
+      case EventType.maxAllowanceExceeded:
         return 'from $name';
       case EventType.connected:
       case EventType.ownershipClaimed:
