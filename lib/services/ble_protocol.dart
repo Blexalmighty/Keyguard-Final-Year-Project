@@ -1,4 +1,4 @@
-/// The KeyGuard BLE wire contract.
+/// The Find X BLE wire contract.
 ///
 /// This file is the single source of truth for every UUID, command string and
 /// response prefix exchanged with the keyholder. It has a mirror-image set of
@@ -39,13 +39,21 @@ class BleNames {
   /// cannot single out *this* keyholder (and by extension its owner) from a
   /// scan. See docs/SECURITY_MODEL.md.
   ///
-  /// Eight characters, and there is no room for a ninth. A legacy advertisement
-  /// is 31 bytes: 18 for the 128-bit service UUID, 3 for the flags, leaving 10
-  /// for a 2-byte AD header plus the name. Firmware that advertised a longer
-  /// name had it silently relegated to the scan response by the ESP32 BLE
-  /// library — which is why such a device turned up in the scan list as a row
-  /// with no name at all.
-  static const String keyholder = 'KeyGuard';
+  /// Seven characters, and the ceiling is eight. A legacy advertisement is 31
+  /// bytes: 18 for the 128-bit service UUID, 3 for the flags, leaving 10 for a
+  /// 2-byte AD header plus the name. Firmware that advertised a longer name had
+  /// it silently relegated to the scan response by the ESP32 BLE library —
+  /// which is why such a device turned up in the scan list as a row with no
+  /// name at all. `test/auth_test.dart` holds that budget.
+  static const String keyholder = 'Find Me';
+
+  /// What firmware older than the rename advertised.
+  ///
+  /// Kept because a board already flashed with it is still the owner's board.
+  /// Dropping it would leave working hardware unrecognised until it was
+  /// reflashed, and "the app stopped seeing my device" is a worse outcome than
+  /// carrying one extra string. Nothing infers ownership from it.
+  static const String legacyKeyguard = 'KeyGuard';
 
   /// What firmware older than the single-name change advertised while unclaimed.
   ///
@@ -55,7 +63,11 @@ class BleNames {
 
   /// Names that may be a keyholder, used as a fallback when a device's
   /// advertising packet omits the service UUID.
-  static const List<String> candidates = [keyholder, legacyUnclaimed];
+  static const List<String> candidates = [
+    keyholder,
+    legacyKeyguard,
+    legacyUnclaimed,
+  ];
 }
 
 /// Claim state, advertised as one byte of service data under

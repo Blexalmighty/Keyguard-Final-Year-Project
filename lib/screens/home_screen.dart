@@ -41,12 +41,23 @@ class _HomeScreenState extends State<HomeScreen>
     super.dispose();
   }
 
+  /// Starts the pulse immediately, then hands off to the service.
+  ///
+  /// The animation is started before the await rather than after it, so the
+  /// button visibly reacts on the first press even if the GATT write takes a
+  /// moment. `pingKey` flips its state up front for the same reason, and rolls
+  /// it back if the write fails — at which point `isPinging` is false and the
+  /// repeat below correctly declines to start.
   void _onPingPressed(BleService bleService) {
     if (!bleService.isConnected) return;
-    bleService.pingKey();
+    if (!mounted) return;
+
     _pingPulse.forward(from: 0.0).then((_) {
-      if (bleService.isPinging) _pingPulse.repeat(reverse: true);
+      // `mounted` because a tab switch can dispose this state while the 1.2s
+      // forward run is still going, and driving a disposed controller throws.
+      if (mounted && bleService.isPinging) _pingPulse.repeat(reverse: true);
     });
+    bleService.pingKey();
   }
 
   @override
@@ -146,7 +157,7 @@ class _AppBar extends StatelessWidget {
                 children: [
                   const AppLogoTile(),
                   const SizedBox(width: 10),
-                  const AppWordmark('KeyGuard'),
+                  const AppWordmark('Find X'),
                 ],
               ),
               BatteryPill(
@@ -247,7 +258,7 @@ class _ConnectionCard extends StatelessWidget {
                     // link there is no keyholder to name. The name is stored on
                     // the phone for the anti-stalking reason in
                     // SettingsStore.nicknameFor: a claimed keyholder
-                    // deliberately advertises the generic "KeyGuard", so the
+                    // deliberately advertises the generic "Find Me", so the
                     // radio must never carry the owner's label.
                     if (connected)
                       GestureDetector(

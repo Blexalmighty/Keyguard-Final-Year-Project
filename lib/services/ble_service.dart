@@ -324,6 +324,14 @@ class BleService extends ChangeNotifier {
   bool _keepHunting = false;
   Timer? _rescanTimer;
 
+  /// Whether the scan currently running was started by the hunt loop rather
+  /// than by the owner.
+  ///
+  /// Read by the `scanResults` error handler, which is subscribed once for the
+  /// object's lifetime and so has no other way to tell an automatic scan from
+  /// one the owner asked for.
+  bool _scanIsBackground = false;
+
   /// True once the keyholder has crossed half the alert distance on its way out,
   /// so the warning fires once per departure rather than on every RSSI sample.
   bool _proximityWarned = false;
@@ -390,7 +398,7 @@ class BleService extends ChangeNotifier {
   /// The name to put in front of the owner for [deviceId].
   ///
   /// Prefers the nickname they chose, because a claimed keyholder advertises the
-  /// deliberately generic "KeyGuard" — see SettingsStore.nicknameFor. Falls back
+  /// deliberately generic "Find Me" — see SettingsStore.nicknameFor. Falls back
   /// to whatever the radio broadcast, then to a last resort so no card is ever
   /// blank.
   String displayNameFor(String id, {String? advertised}) {
@@ -478,6 +486,19 @@ class BleService extends ChangeNotifier {
   bool get isBluetoothOn => _adapterState == BluetoothAdapterState.on;
   bool get hasInternet => _hasInternet;
   String get lastError => _lastError;
+
+  /// Dismiss whatever is in [lastError].
+  ///
+  /// The banner that shows this used to have no way off the screen: nothing
+  /// cleared `_lastError` except the *start* of the next scan or connect, so a
+  /// message like "could not connect after 3 tries" sat there in red long after
+  /// the keyholder had been found and was sitting in the list. An error the user
+  /// has read and acted on is no longer news, and they need to be able to say so.
+  void clearError() {
+    if (_lastError.isEmpty) return;
+    _lastError = '';
+    notifyListeners();
+  }
 
   List<BleDevice> get scannedDevices => List.unmodifiable(_scannedDevices);
   List<EventModel> get historyEvents => List.unmodifiable(_historyEvents);
@@ -718,7 +739,7 @@ class BleService extends ChangeNotifier {
     _rescanTimer?.cancel();
     _rescanTimer = Timer(_rescanGap, () {
       if (!_keepHunting || _isConnected || _isConnecting) return;
-      unawaited(startActiveHardwareScan());
+      unawaited(startActiveHardwareScan(background: true));
     });
   }
 
@@ -731,7 +752,7 @@ class BleService extends ChangeNotifier {
     if (kIsWeb) return;
     _keepHunting = true;
     if (!_isConnected && !_isConnecting && !FlutterBluePlus.isScanningNow) {
-      unawaited(startActiveHardwareScan());
+      unawaited(startActiveHardwareScan(background: true));
     }
   }
 
@@ -819,7 +840,7 @@ class BleService extends ChangeNotifier {
         _permissionStatusMessage = scan.isPermanentlyDenied ||
                 connect.isPermanentlyDenied
             ? 'Bluetooth permissions were permanently denied. Enable them in '
-                'Android Settings › Apps › KeyGuard › Permissions.'
+                'Android Settings › Apps › Find X › Permissions.'
             : 'Nearby-devices permission is required to find your keyholder.';
         notifyListeners();
       }
@@ -844,6 +865,10 @@ class BleService extends ChangeNotifier {
     _scanSubscription = FlutterBluePlus.scanResults.listen(
       _onScanResults,
       onError: (Object e) {
+        if (_scanIsBackground) {
+          debugPrint('BleService: background scan stream error: $e');
+          return;
+        }
         _lastError = 'Scan failed: $e';
         notifyListeners();
       },
@@ -1041,8 +1066,17 @@ class BleService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> startActiveHardwareScan() async {
-    _lastError = '';
+  /// Starts a general scan.
+  ///
+  /// [background] marks a start the owner did not ask for — the automatic
+  /// re-arm in [_armRescan]. Those failures are logged, not shown. The hunt loop
+  /// retries every [_rescanGap] on its own, so surfacing a transient failure
+  /// from one of its attempts put a red banner on screen describing something
+  /// the app was already in the middle of fixing, and left it there. A scan the
+  /// owner started by tapping still reports honestly.
+  Future<void> startActiveHardwareScan({bool background = false}) async {
+    if (!background) _lastError = '';
+    _scanIsBackground = background;
 
     if (kIsWeb) {
       _permissionStatusMessage =
@@ -1079,12 +1113,18 @@ class BleService extends ChangeNotifier {
         removeIfGone: const Duration(seconds: 10),
       );
     } catch (e) {
+      if (background) {
+        // The hunt loop will try again in [_rescanGap]. Saying so in red would
+        // describe a problem the app is already recovering from.
+        debugPrint('BleService: background rescan failed to start: $e');
+        return;
+      }
       _lastError = 'Could not start scanning: $e';
       notifyListeners();
     }
   }
 
-  /// A narrow scan that only surfaces KeyGuard hardware, for the pairing flow.
+  /// A narrow scan that only surfaces Find Me hardware, for the pairing flow.
   ///
   /// The general scan above is intentionally unfiltered so the Scan tab can list
   /// everything in the room; only one BLE scan can run at a time, so the two
@@ -1128,8 +1168,13 @@ class BleService extends ChangeNotifier {
     // "try again" after the run of failures that stopped the hunt.
     _autoConnectFailures = 0;
     _autoConnectDone = false;
+    // Started *before* `beginContinuousScan`, which also starts one. If the
+    // hunt loop got there first this call would hit the "already scanning"
+    // guard and return without clearing [lastError] — leaving the owner tapping
+    // Scan at a red banner that never goes away.
+    final started = startActiveHardwareScan();
     beginContinuousScan();
-    return startActiveHardwareScan();
+    return started;
   }
 
   // ===========================================================================
@@ -1197,6 +1242,12 @@ class BleService extends ChangeNotifier {
 
       // Connected, so the run of failures is over.
       _autoConnectFailures = 0;
+      // ...and so is anything the failures put on screen. `_lastError` is
+      // cleared at the top of this method too, but a give-up message written by
+      // an *earlier* attempt's `finally` block survives that, because it is set
+      // after the clear. Without this line the owner sat looking at "could not
+      // connect after 3 tries" while the dial read Connected.
+      _lastError = '';
 
       _logEvent(EventType.connected);
 
@@ -1242,9 +1293,15 @@ class BleService extends ChangeNotifier {
           beginContinuousScan();
         } else {
           // Out of automatic attempts. Say so, rather than leaving the owner
-          // looking at a screen that claims nothing is wrong.
-          _lastError = 'Could not connect after $_autoConnectFailures tries. '
-              'Tap the dial to try again.';
+          // looking at a screen that claims nothing is wrong — and name the
+          // usual cause, because "found it but could not connect" almost always
+          // means the keyholder is still holding a session open with another
+          // phone, or was carried out of range between the scan hit and the
+          // connect. Neither is obvious from a bare failure count.
+          _lastError =
+              'Found your keyholder but could not connect after $_autoConnectFailures '
+              'tries. It may still be connected to another phone, or have moved '
+              'out of range. Tap the dial to try again.';
           notifyListeners();
         }
       }
@@ -1307,7 +1364,7 @@ class BleService extends ChangeNotifier {
         return true;
       }
 
-      // Shows the system "Pair with KeyGuard? Enter PIN" dialog. The code it
+      // Shows the system "Pair with Find Me? Enter PIN" dialog. The code it
       // asks for is the one the firmware is rendering on the OLED.
       //
       // `createBond` waits for the outcome itself and throws if the bond does
@@ -1366,7 +1423,7 @@ class BleService extends ChangeNotifier {
     }
     if (target == null) {
       throw StateError(
-        'This device does not expose the KeyGuard service '
+        'This device does not expose the Find Me service '
         '(${BleUuids.service}). It is not a keyholder.',
       );
     }
@@ -1379,7 +1436,7 @@ class BleService extends ChangeNotifier {
     _provChar = _findChar(target, BleUuids.provChar);
 
     if (_dataChar == null) {
-      throw StateError('KeyGuard service is missing its data characteristic.');
+      throw StateError('Find Me service is missing its data characteristic.');
     }
 
     _dataSubscription =
@@ -1681,7 +1738,7 @@ class BleService extends ChangeNotifier {
   // ===========================================================================
 
   void _handleDataFrame(String data) {
-    debugPrint('KeyGuard → app: $data');
+    debugPrint('Find Me → app: $data');
 
     if (data == BleResponses.ready) {
       _lastError = '';
@@ -1746,7 +1803,7 @@ class BleService extends ChangeNotifier {
   /// Republished for `pairing_service.dart`; the handshake itself is not this
   /// class's job, but the connection state it produces is.
   void _handleAuthFrame(String data) {
-    debugPrint('KeyGuard auth → app: $data');
+    debugPrint('Find Me auth → app: $data');
 
     if (data == BleResponses.statusUnclaimed) {
       _ownershipState = OwnershipState.unclaimed;
@@ -1903,6 +1960,19 @@ class BleService extends ChangeNotifier {
     _rebuildScannedDevices();
   }
 
+  /// Rings the keyholder's buzzer.
+  ///
+  /// The state flips *before* the write, not after. A GATT write is a round trip
+  /// over the radio and can take a noticeable fraction of a second — longer on a
+  /// congested 2.4 GHz band — and while it was awaited the button had no way to
+  /// show it had been pressed: `isPinging` was still false, so the ring animation
+  /// had nothing to run on and the Stop Alert button, which only exists while
+  /// `isAlertActive`, had not appeared yet. The press looked ignored, and the
+  /// owner pressed again.
+  ///
+  /// If the write fails the state is rolled back, so an optimistic flip cannot
+  /// leave the UI claiming a buzzer is sounding on a device that never got the
+  /// command. `_write` has already set `_lastError` in that case.
   Future<void> pingKey() async {
     if (!_isConnected) {
       _lastError = 'Connect to your keyholder before pinging it.';
@@ -1910,12 +1980,29 @@ class BleService extends ChangeNotifier {
       return;
     }
 
-    final ok = await _write(BleCommands.findKey);
-    if (!ok) return;
+    // Already ringing: the owner pressing Ping again means "I still cannot find
+    // it", not "start a second alert". Re-arm the timeout so the buzzer is not
+    // cut short by a countdown that started with the first press.
+    if (_isAlertActive) {
+      _armAlertTimeout();
+      unawaited(_write(BleCommands.findKey));
+      return;
+    }
 
     _isPinging = true;
     _isAlertActive = true;
     _armAlertTimeout();
+    notifyListeners();
+
+    final ok = await _write(BleCommands.findKey);
+    if (!ok) {
+      _alertTimer?.cancel();
+      _isPinging = false;
+      _isAlertActive = false;
+      notifyListeners();
+      return;
+    }
+
     _logEvent(EventType.phonePingedKey);
   }
 
@@ -1923,16 +2010,25 @@ class BleService extends ChangeNotifier {
   ///
   /// Sends STOP to the keyholder *and* stops the phone ringing, because from the
   /// user's point of view there is one noise to make go away and they should not
-  /// have to know which device is producing it. The write is attempted first but
-  /// its result is not checked: if the link has dropped, the phone must still
-  /// fall silent.
+  /// have to know which device is producing it.
+  ///
+  /// The local state is cleared first and the write is not awaited before the
+  /// UI is told. The reason is the same as in [pingKey], and here it matters
+  /// more: the one thing this button must do is make the noise stop, and making
+  /// the owner watch a spinner while a write times out on a link that has
+  /// already gone is the worst possible moment to be unresponsive. A STOP that
+  /// fails to reach a keyholder is covered anyway — its buzzer times out on its
+  /// own, which is what [_alertAutoClear] mirrors.
   Future<void> stopAlert() async {
-    await _write(BleCommands.stop);
     _alertTimer?.cancel();
     _isPinging = false;
     _isAlertActive = false;
-    await _ringer?.stop();
     notifyListeners();
+
+    // The phone's own ringer first: it is the noise coming out of the device in
+    // the owner's hand, so it is the one they expect to stop instantly.
+    await _ringer?.stop();
+    await _write(BleCommands.stop);
   }
 
   /// Refreshes the last known position.
@@ -2384,7 +2480,7 @@ class BleService extends ChangeNotifier {
     final rand = Random(7); // Fixed seed: reproducible for screenshots.
     _discovered['DEMO-KEYHOLDER'] = BleDevice(
       id: 'DEMO-KEYHOLDER',
-      name: 'KeyGuard (demo)',
+      name: 'Find Me (demo)',
       rssi: -48,
       macAddress: 'DE:M0:00:01',
       deviceType: BleDeviceType.keyholder,

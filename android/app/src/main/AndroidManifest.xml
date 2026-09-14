@@ -94,7 +94,7 @@
         any accidental plaintext request.
     -->
     <application
-        android:label="KeyGuard"
+        android:label="Find X"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="false">

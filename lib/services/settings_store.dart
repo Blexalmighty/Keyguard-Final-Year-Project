@@ -180,7 +180,7 @@ class SettingsStore {
 
   // --- Device nicknames ---
   //
-  // A claimed keyholder advertises the generic name "KeyGuard" on purpose: a
+  // A claimed keyholder advertises the generic name "Find Me" on purpose: a
   // per-unit name in the advertising packet lets a passer-by single out *this*
   // device, and by extension follow its owner around. That is the anti-stalking
   // property in docs/SECURITY_MODEL.md and it is not negotiable.
@@ -188,7 +188,7 @@ class SettingsStore {
   // The consequence is that every claimed keyholder looks identical on screen.
   // The fix is a nickname that lives *on the phone* and never goes near the
   // radio: the owner sees "Ife's keys", a stranger scanning the room still sees
-  // nothing but "KeyGuard". Same approach Apple uses for AirTags.
+  // nothing but "Find Me". Same approach Apple uses for AirTags.
   //
   // Keyed by BLE remote id, so a phone that owns two keyholders names them
   // independently.

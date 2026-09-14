@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../build_info.dart';
 import '../models/alert_distances.dart';
 import '../models/alert_pattern.dart';
+import '../models/ble_device.dart';
 import '../models/history_retention.dart';
 import '../models/phone_alert_tone.dart';
 import '../services/ble_service.dart';
@@ -15,6 +16,7 @@ import '../theme/app_theme.dart';
 import '../widgets/app_logo_tile.dart';
 import '../widgets/motion.dart';
 import '../widgets/section_label.dart';
+import 'pairing_screen.dart';
 import 'wifi_setup_screen.dart';
 
 /// Settings: device info, calibration, preferences, ownership, demo mode.
@@ -1495,12 +1497,40 @@ class _OwnershipCard extends StatelessWidget {
 
   final BleService bleService;
 
+  /// The connected keyholder as the scan list knows it, if it can be claimed.
+  ///
+  /// Taken from the scan list rather than built from the connection, because
+  /// [PairingScreen] needs the advertised ownership state to decide what to
+  /// offer, and only the scan carries it. A device already claimed by somebody
+  /// else is excluded: the firmware would refuse, so offering the button would
+  /// be a promise the hardware does not keep.
+  ///
+  /// A static method rather than a local in `build` so the result is final and
+  /// promotes to non-null inside the button's callback.
+  static BleDevice? _claimableAmong(List<BleDevice> devices, String id) {
+    for (final d in devices) {
+      if (d.id == id &&
+          d.deviceType == BleDeviceType.keyholder &&
+          !d.isDemo &&
+          d.ownership != OwnershipState.claimedByOther) {
+        return d;
+      }
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
     final pairing = context.watch<PairingService>();
     final owned = pairing.ownedDevices;
     final canRelease = bleService.isConnected && pairing.isAuthenticated;
+
+    // The keyholder this phone could claim right now, or null.
+    final connectedId = bleService.connectedDevice?.remoteId.str;
+    final claimTarget = owned.isEmpty && connectedId != null
+        ? _claimableAmong(bleService.scannedDevices, connectedId)
+        : null;
 
     return _Card(
       borderColor: owned.isEmpty ? null : p.success.withValues(alpha: 0.3),
@@ -1571,17 +1601,42 @@ class _OwnershipCard extends StatelessWidget {
           const SizedBox(height: 4),
           SizedBox(
             width: double.infinity,
-            child: OutlinedButton(
-              onPressed: owned.isEmpty
-                  ? null
-                  : () => _release(context, bleService, canRelease),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: p.danger,
-                side: BorderSide(color: p.danger.withValues(alpha: 0.3)),
-              ),
-              child: const Text('Release Ownership'),
-            ),
+            // Two different buttons, because the card has two different states
+            // and only one of them is about releasing. While nothing is owned,
+            // Release Ownership is permanently grey — it reads as broken, and
+            // the text above it points at a Pair screen the card gives no way
+            // to reach. So when there is a connected keyholder to claim, the
+            // button becomes the action the owner actually needs.
+            child: owned.isEmpty && claimTarget != null
+                ? FilledButton.icon(
+                    onPressed: () => PairingScreen.open(context, claimTarget),
+                    icon: const Icon(Icons.vpn_key_rounded, size: 16),
+                    label: const Text('Claim This Keyholder'),
+                  )
+                : OutlinedButton(
+                    onPressed: owned.isEmpty
+                        ? null
+                        : () => _release(context, bleService, canRelease),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: p.danger,
+                      side: BorderSide(color: p.danger.withValues(alpha: 0.3)),
+                    ),
+                    child: const Text('Release Ownership'),
+                  ),
           ),
+          if (owned.isEmpty && claimTarget == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Text(
+                // Why the button above is grey, said plainly. Without this the
+                // card looks broken rather than inapplicable.
+                bleService.isConnected
+                    ? 'Claiming needs the keyholder in the scan list. Open the '
+                        'Scan tab, then tap your keyholder to pair.'
+                    : 'Nothing to release yet. Connect to a keyholder first.',
+                style: AppTypography.microLabel(color: p.muted),
+              ),
+            ),
           if (owned.isNotEmpty && !canRelease)
             Padding(
               padding: const EdgeInsets.only(top: 7),

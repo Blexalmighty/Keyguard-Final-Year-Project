@@ -17,7 +17,7 @@ import 'widgets/phone_ringing_banner.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const KeyGuardProviders(child: KeyGuardApp()));
+  runApp(const FindXProviders(child: FindXApp()));
 }
 
 /// The app's dependency graph, as one widget.
@@ -27,8 +27,8 @@ void main() {
 /// test broke with `ProviderNotFoundException` — the tests were quietly
 /// maintaining their own copy of the graph. Anything that needs the real service
 /// wiring should wrap itself in this.
-class KeyGuardProviders extends StatelessWidget {
-  const KeyGuardProviders({super.key, required this.child});
+class FindXProviders extends StatelessWidget {
+  const FindXProviders({super.key, required this.child});
 
   final Widget child;
 
@@ -97,8 +97,8 @@ class KeyGuardProviders extends StatelessWidget {
   }
 }
 
-class KeyGuardApp extends StatelessWidget {
-  const KeyGuardApp({super.key});
+class FindXApp extends StatelessWidget {
+  const FindXApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -116,7 +116,7 @@ class KeyGuardApp extends StatelessWidget {
     return Selector<BleService, bool>(
       selector: (_, service) => service.darkModeEnabled,
       builder: (context, darkMode, _) => MaterialApp(
-        title: 'KeyGuard BLE',
+        title: 'Find X',
         debugShowCheckedModeBanner: false,
         // Both themes are built from AppPalette, so a screen never has to ask
         // which one is active. The inline `ColorScheme.fromSeed` pair that used to

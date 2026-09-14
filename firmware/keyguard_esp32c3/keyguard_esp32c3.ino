@@ -1,5 +1,5 @@
 /* ===========================================================================
- * KeyGuard — BLE object locator with owner-locked pairing
+ * Find X — BLE object locator with owner-locked pairing
  * ESP32-C3 Super Mini (AOICRIE) + onboard 0.42" OLED
  *
  * Two-Way BLE-Based Object Proximity Alert System for Personal Item Recovery
@@ -144,10 +144,10 @@
  * data instead, for two reasons. It keeps the advertised identity constant, and
  * "BLE-Keyholder" did not fit: 15 bytes of name plus 18 of service UUID plus 3
  * of flags overruns the 31-byte legacy advertising packet, and the ESP32 BLE
- * library drops the overflowing field without saying so. "KeyGuard" is 8
- * characters, which is exactly the budget that remains.
+ * library drops the overflowing field without saying so. "Find Me" is 7
+ * characters, inside the 8 the budget allows.
  * Full mitigation needs resolvable private addresses; see docs/SECURITY_MODEL.md */
-#define ADV_NAME "KeyGuard"
+#define ADV_NAME "Find Me"
 
 /* Claim state, advertised as one byte of service data under SERVICE_UUID so the
  * app can tell an unclaimed keyholder from somebody else's before connecting.
@@ -1479,7 +1479,7 @@ void serviceButton() {
 void setup() {
   Serial.begin(115200);
   delay(300);  // let USB CDC come up so the first prints are not lost
-  Serial.println("\nKeyGuard starting");
+  Serial.println("\nFind Me starting");
 
   pinMode(PIN_LED, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);

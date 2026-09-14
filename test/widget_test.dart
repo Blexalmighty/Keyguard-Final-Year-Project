@@ -11,18 +11,18 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('boots and reports itself Disconnected', (tester) async {
-    // KeyGuardProviders rather than a hand-rolled provider tree: when the app
+    // FindXProviders rather than a hand-rolled provider tree: when the app
     // gained PairingService, a local copy of the graph here broke both widget
     // tests with ProviderNotFoundException. Sharing the real one means the test
     // cannot drift from production wiring again.
-    await tester.pumpWidget(const KeyGuardProviders(child: KeyGuardApp()));
+    await tester.pumpWidget(const FindXProviders(child: FindXApp()));
     await tester.pump();
 
-    // 'KeyGuard', not 'KeyGuard BLE'. The wordmark dropped the transport when
-    // the Bluetooth-vs-Wi-Fi split was removed: the app no longer presents a
-    // radio as something the user chooses, so naming one in the title was the
-    // last place that framing survived.
-    expect(find.text('KeyGuard'), findsWidgets);
+    // 'Find X' is the app; the hardware is 'Find Me'. The wordmark also
+    // dropped the transport when the Bluetooth-vs-Wi-Fi split was removed: the
+    // app no longer presents a radio as something the user chooses, so naming
+    // one in the title was the last place that framing survived.
+    expect(find.text('Find X'), findsWidgets);
 
     // The previous version of this test asserted findsWidgets on 'Connected'.
     // It passed only because BleService set `_isConnected = true` in its field
@@ -41,7 +41,7 @@ void main() {
     // which happily expanded to the full screen height inside the loose
     // constraints Scaffold gives its bottom bar, squeezing the body to nothing.
     // Every text assertion still passed. Only measured geometry catches it.
-    await tester.pumpWidget(const KeyGuardProviders(child: KeyGuardApp()));
+    await tester.pumpWidget(const FindXProviders(child: FindXApp()));
     await tester.pump();
 
     final screen = tester.getSize(find.byType(MaterialApp));
@@ -60,12 +60,12 @@ void main() {
     // And the body must actually get the rest. The Home screen's own header is
     // the first thing in it, so if that is not above the bar, the body was
     // squeezed to nothing.
-    expect(tester.getRect(find.text('KeyGuard').first).top,
+    expect(tester.getRect(find.text('Find X').first).top,
         lessThan(navBar.top));
   });
 
   testWidgets('shows no Demo Mode banner by default', (tester) async {
-    await tester.pumpWidget(const KeyGuardProviders(child: KeyGuardApp()));
+    await tester.pumpWidget(const FindXProviders(child: FindXApp()));
     await tester.pump();
 
     expect(
@@ -78,7 +78,7 @@ void main() {
   testWidgets('owns no keyholder on a fresh install', (tester) async {
     // The ownership card must not imply a paired device before anything is
     // paired — the class of false claim this rewrite exists to remove.
-    await tester.pumpWidget(const KeyGuardProviders(child: KeyGuardApp()));
+    await tester.pumpWidget(const FindXProviders(child: FindXApp()));
     await tester.pump();
 
     expect(find.textContaining('YOUR DEVICE'), findsNothing);
