@@ -1,5 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/alert_distances.dart';
 import '../models/alert_pattern.dart';
 import '../models/history_retention.dart';
 import '../models/phone_alert_tone.dart';
@@ -31,12 +32,15 @@ class SettingsStore {
   static const String _kDarkMode = 'dark_mode_enabled';
   static const String _kDemoMode = 'demo_mode_enabled';
   static const String _kAlertDistance = 'alert_distance_threshold';
+  static const String _kMaxAllowance = 'max_allowance_distance';
   static const String _kTxPower = 'rssi_tx_power';
   static const String _kPathLoss = 'rssi_path_loss_exponent';
   static const String _kHistory = 'history_events_json';
   static const String _kHistoryRetention = 'history_retention';
   static const String _kNicknamePrefix = 'device_nickname_';
   static const String _kProximityWarning = 'proximity_warning_enabled';
+  static const String _kBackgroundRunning = 'background_running_enabled';
+  static const String _kBackgroundAsked = 'background_permission_asked';
   static const String _kLastDeviceId = 'last_device_id';
   static const String _kLastDeviceName = 'last_device_name';
 
@@ -103,6 +107,29 @@ class SettingsStore {
   Future<void> setWifiCloudSyncEnabled(bool v) =>
       _prefs.setBool(_kWifiCloudSync, v);
 
+  /// Whether the app should hold itself open after the owner leaves the screen.
+  ///
+  /// Defaults to true. The app's entire purpose is to notice something while
+  /// nobody is looking at it — a key finder that only watches while its screen
+  /// is open is a status display, not an alarm. The cost is one silent ongoing
+  /// notification, which Android requires and which doubles as the link status.
+  bool get backgroundRunningEnabled =>
+      _prefs.getBool(_kBackgroundRunning) ?? true;
+  Future<void> setBackgroundRunningEnabled(bool v) =>
+      _prefs.setBool(_kBackgroundRunning, v);
+
+  /// Whether the owner has already been asked for the notification permission
+  /// that background running needs.
+  ///
+  /// Tracked separately from the permission itself so a refusal is remembered
+  /// as a *decision*. Without this the app could not tell "never asked" from
+  /// "said no", and would re-prompt on every single launch — which is how an
+  /// app teaches its owner to deny things reflexively.
+  bool get backgroundPermissionAsked =>
+      _prefs.getBool(_kBackgroundAsked) ?? false;
+  Future<void> setBackgroundPermissionAsked(bool v) =>
+      _prefs.setBool(_kBackgroundAsked, v);
+
   HistoryRetention get historyRetention =>
       HistoryRetention.fromStorage(_prefs.getString(_kHistoryRetention));
   Future<void> setHistoryRetention(HistoryRetention v) =>
@@ -121,6 +148,17 @@ class SettingsStore {
       _prefs.getDouble(_kAlertDistance) ?? 2.0;
   Future<void> setAlertDistanceThreshold(double v) =>
       _prefs.setDouble(_kAlertDistance, v);
+
+  /// The outer boundary, beyond the alert distance.
+  ///
+  /// Defaults to [kDefaultMaxAllowance] rather than to the alert distance, so
+  /// the escalation exists on a fresh install without the owner having to
+  /// discover the setting. `BleService` clamps it to at least the alert
+  /// distance, which is the invariant that keeps the three boundaries in order.
+  double get maxAllowanceDistance =>
+      _prefs.getDouble(_kMaxAllowance) ?? kDefaultMaxAllowance;
+  Future<void> setMaxAllowanceDistance(double v) =>
+      _prefs.setDouble(_kMaxAllowance, v);
 
   // --- RSSI calibration (see ProximityModel) ---
 
@@ -167,7 +205,7 @@ class SettingsStore {
 
   // --- Device nicknames ---
   //
-  // A claimed keyholder advertises the generic name "KeyGuard" on purpose: a
+  // A claimed keyholder advertises the generic name "Find Me" on purpose: a
   // per-unit name in the advertising packet lets a passer-by single out *this*
   // device, and by extension follow its owner around. That is the anti-stalking
   // property in docs/SECURITY_MODEL.md and it is not negotiable.
@@ -175,7 +213,7 @@ class SettingsStore {
   // The consequence is that every claimed keyholder looks identical on screen.
   // The fix is a nickname that lives *on the phone* and never goes near the
   // radio: the owner sees "Ife's keys", a stranger scanning the room still sees
-  // nothing but "KeyGuard". Same approach Apple uses for AirTags.
+  // nothing but "Find Me". Same approach Apple uses for AirTags.
   //
   // Keyed by BLE remote id, so a phone that owns two keyholders names them
   // independently.

@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:provider/provider.dart';
+import 'services/background_service.dart';
 import 'services/ble_service.dart';
+import 'services/network_info_service.dart';
 import 'services/notification_service.dart';
 import 'services/owner_identity.dart';
 import 'services/pairing_service.dart';
+import 'services/phone_location_service.dart';
 import 'services/phone_ringer_service.dart';
 import 'screens/home_screen.dart';
 import 'screens/scan_screen.dart';
@@ -15,7 +19,14 @@ import 'widgets/phone_ringing_banner.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const KeyGuardProviders(child: KeyGuardApp()));
+  // Opens the channel the foreground service's isolate uses to talk back to
+  // this one. Must happen before `runApp`, and must happen even when background
+  // running is switched off — without it the Stop button on the ongoing
+  // notification has nowhere to deliver its press. A no-op off Android.
+  if (BackgroundService.isSupported) {
+    FlutterForegroundTask.initCommunicationPort();
+  }
+  runApp(const FindXProviders(child: FindXApp()));
 }
 
 /// The app's dependency graph, as one widget.
@@ -25,8 +36,8 @@ void main() {
 /// test broke with `ProviderNotFoundException` — the tests were quietly
 /// maintaining their own copy of the graph. Anything that needs the real service
 /// wiring should wrap itself in this.
-class KeyGuardProviders extends StatelessWidget {
-  const KeyGuardProviders({super.key, required this.child});
+class FindXProviders extends StatelessWidget {
+  const FindXProviders({super.key, required this.child});
 
   final Widget child;
 
@@ -48,15 +59,28 @@ class KeyGuardProviders extends StatelessWidget {
           create: (_) => NotificationService()..init(),
         ),
 
-        // `ChangeNotifierProxyProvider` only so `update` can inject the ringer
-        // and the notifier. The BleService instance itself is created once and
-        // never replaced.
-        ChangeNotifierProxyProvider2<PhoneRingerService, NotificationService,
-            BleService>(
+        // Not a ChangeNotifier either. The phone's receiver is polled on demand
+        // by BleService rather than streamed to the UI: a continuous position
+        // stream would hold the GPS on all day for the sake of a screen that
+        // only needs a position at the moment the link changes.
+        Provider<PhoneLocationService>(create: (_) => PhoneLocationService()),
+
+        // Reads the phone's IP address for the last-known-location card. Not a
+        // ChangeNotifier for the same reason: it is polled on attach and on
+        // connectivity changes, not streamed.
+        Provider<NetworkInfoService>(create: (_) => NetworkInfoService()),
+
+        // `ChangeNotifierProxyProvider` only so `update` can inject the ringer,
+        // the notifier, the phone's location and its network address. The
+        // BleService instance itself is created once and never replaced.
+        ChangeNotifierProxyProvider4<PhoneRingerService, NotificationService,
+            PhoneLocationService, NetworkInfoService, BleService>(
           create: (_) => BleService(),
-          update: (_, ringer, notifications, ble) => ble!
+          update: (_, ringer, notifications, location, network, ble) => ble!
             ..attachRinger(ringer)
-            ..attachNotifications(notifications),
+            ..attachNotifications(notifications)
+            ..attachPhoneLocation(location)
+            ..attachNetworkInfo(network),
         ),
 
         // One instance for the whole app: it caches the owner id so the pairing
@@ -82,8 +106,8 @@ class KeyGuardProviders extends StatelessWidget {
   }
 }
 
-class KeyGuardApp extends StatelessWidget {
-  const KeyGuardApp({super.key});
+class FindXApp extends StatelessWidget {
+  const FindXApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -101,7 +125,7 @@ class KeyGuardApp extends StatelessWidget {
     return Selector<BleService, bool>(
       selector: (_, service) => service.darkModeEnabled,
       builder: (context, darkMode, _) => MaterialApp(
-        title: 'KeyGuard BLE',
+        title: 'Find X',
         debugShowCheckedModeBanner: false,
         // Both themes are built from AppPalette, so a screen never has to ask
         // which one is active. The inline `ColorScheme.fromSeed` pair that used to

@@ -39,6 +39,17 @@ dependencies:
   permission_handler: ^11.3.1
   connectivity_plus: ^6.0.5
 
+  # Keeps the app's process alive once the owner leaves the screen.
+  #
+  # Not for running code in a second isolate — the whole point is the opposite.
+  # An Android app with no foreground service is a cached process, first in line
+  # to be killed when memory is short, which is why the app died the moment it
+  # was backgrounded. A foreground service moves it out of that queue, and
+  # because the service lives in the same process, the main isolate's BLE
+  # connection, RSSI polling and timers simply keep running. See
+  # services/background_service.dart.
+  flutter_foreground_task: ^11.0.3
+
   # Non-secret settings (toggles, RSSI calibration, demo mode).
   shared_preferences: ^2.3.2
   # Owner identity + per-device shared secret. Deliberately NOT shared_preferences:
@@ -65,10 +76,27 @@ dependencies:
   # Somewhere permanent to copy a picked ringtone to. The picker hands back a
   # cache path that Android is free to delete, so the raw path cannot be stored.
   path_provider: ^2.1.6
-  # The one system notification this app posts: a heads-up when the keyholder
-  # crosses half the alert distance, so the owner is warned while the app is in
-  # their pocket rather than only when they are staring at it.
+  # The system notifications this app posts: a heads-up when the keyholder
+  # crosses half the alert distance, a louder one when it passes the distance the
+  # owner set, and a quiet note when the link comes up or goes down. Each has its
+  # own channel, so the owner can mute the connection chatter without muting the
+  # warning that matters.
   flutter_local_notifications: ^18.0.1
+  # Where the phone is. The keyholder's own GPS is only reachable while there is a
+  # link to ask over — which is precisely not the case at the moment the link
+  # drops, the instant a position is most wanted. The phone's receiver is
+  # available then, and needs no satellites of its own.
+  #
+  # Resolves to 14.0.2, not 14.0.3: 14.0.3 pulls package_info_plus, which wants
+  # win32 ^6, and file_picker 11 pins win32 ^5.9. The alternative was a major
+  # version bump of file_picker, which would put the ringtone picker at risk for
+  # the sake of a patch release with nothing in it we use.
+  geolocator: ^14.0.2
+  # Hands a position to the phone's maps app. Chosen over google_maps_flutter,
+  # which needs a Maps SDK key and a billing account, and which renders a blank
+  # grey square without one — indistinguishable, on the location card, from
+  # "no fix yet". See lib/utils/maps_launcher.dart.
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:

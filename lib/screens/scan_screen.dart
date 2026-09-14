@@ -202,6 +202,7 @@ class ScanScreen extends StatelessWidget {
           message: bleService.lastError,
           fg: p.danger,
           bg: p.dangerSoft,
+          onDismiss: bleService.clearError,
         ),
       );
     }
@@ -252,7 +253,7 @@ class _ScanAppBar extends StatelessWidget {
                 children: [
                   const AppLogoTile(),
                   const SizedBox(width: 10),
-                  const AppWordmark('KeyGuard'),
+                  const AppWordmark('Find X'),
                 ],
               ),
 
@@ -357,6 +358,7 @@ class _InfoBanner extends StatelessWidget {
     required this.message,
     required this.fg,
     required this.bg,
+    this.onDismiss,
   });
 
   final IconData icon;
@@ -364,10 +366,17 @@ class _InfoBanner extends StatelessWidget {
   final Color fg;
   final Color bg;
 
+  /// Shows a close button when non-null.
+  ///
+  /// Only the error banner passes one. "Bluetooth is off" and the permission
+  /// hint describe a condition that is still true — dismissing those would hide
+  /// a fact, not an old message — so they stay until the condition changes.
+  final VoidCallback? onDismiss;
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.fromLTRB(12, 12, onDismiss == null ? 12 : 4, 12),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(14),
@@ -380,6 +389,15 @@ class _InfoBanner extends StatelessWidget {
           Expanded(
             child: Text(message, style: AppTypography.bodyMd(color: fg)),
           ),
+          if (onDismiss != null)
+            IconButton(
+              onPressed: onDismiss,
+              icon: Icon(Icons.close_rounded, color: fg, size: 18),
+              tooltip: 'Dismiss',
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              padding: EdgeInsets.zero,
+            ),
         ],
       ),
     );

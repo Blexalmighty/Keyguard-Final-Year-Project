@@ -54,7 +54,7 @@ class AppLogoTile extends StatelessWidget {
   }
 }
 
-/// The 'KeyGuard' wordmark, or a screen title set in the same face.
+/// The 'Find X' wordmark, or a screen title set in the same face.
 ///
 /// The tight negative tracking is the whole trick — it is what separates a
 /// wordmark from a heading, and it has to be identical on all four tabs.

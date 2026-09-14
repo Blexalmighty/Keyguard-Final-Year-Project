@@ -1,4 +1,4 @@
-/// KeyGuard's design system.
+/// Find X's design system.
 ///
 /// Three things live here and nothing else should duplicate them:
 ///

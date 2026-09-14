@@ -13,8 +13,9 @@
 
     <!--
         `neverForLocation` is a promise that this app does not derive the user's
-        position from nearby radios, and it is one we keep: the keyholder reports
-        its own GPS over BLE. It also means Android 12+ users are never asked for
+        position from nearby radios, and it is one we keep: positions come from
+        this phone's own GPS receiver, never from which Bluetooth devices happen
+        to be in range. It also means Android 12+ users are never asked for
         location just to find their key. BleService therefore calls startScan with
         androidUsesFineLocation: false — the two must agree, and previously did
         not.
@@ -25,11 +26,15 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!--
-        Location. Needed for two things, neither of them BLE scanning on modern
-        Android: (1) Android 11 and below gate BLE discovery behind fine location,
-        and (2) Wi-Fi access-point scanning requires it, for Wi-Fi provisioning.
-        Coarse is declared for API 28 and below, where fine alone was not enough
-        for Wi-Fi results.
+        Location. Needed for three things, only one of them BLE-related: (1) the
+        phone's own GPS, which is what stamps a position on every connect,
+        disconnect and ping — it replaced the keyholder's GPS module, which could
+        only be read while a link was up and so was unreadable at the one moment
+        a position matters; (2) Android 11 and below gate BLE discovery behind
+        fine location; and (3) Wi-Fi access-point scanning requires it, for Wi-Fi
+        provisioning. Coarse is declared as well, both as the fallback when the
+        owner grants approximate location only and for API 28 and below, where
+        fine alone was not enough for Wi-Fi results.
     -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -77,6 +82,32 @@
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+        Background running.
+
+        Without a foreground service this app is a cached process, and Android
+        reclaims those first when memory is short — which is why leaving the app
+        killed the BLE link, the proximity warning and every notification with
+        it. The service holds the process open; the main isolate's connection
+        and timers then carry on untouched.
+
+        The type is `connectedDevice`, not `dataSync`, and that choice has
+        teeth: from Android 15 a dataSync service is stopped after roughly six
+        hours in any 24-hour window. A key finder that silently stops watching
+        after six hours is worse than one that never offered to. This app is
+        genuinely interacting with a connected Bluetooth device, so the accurate
+        type is also the one without the cap.
+
+        REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is asked for at runtime and only
+        when the owner turns the feature on. It is not requested at install and
+        the app works without it — but on phones with a manufacturer battery
+        manager on top of stock Android (Xiaomi, Oppo, Vivo, Huawei) it is
+        frequently the difference between the service surviving and not.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Bluetooth Low Energy is required, not optional: without it there is no app. -->
     <uses-feature android:name="android.hardware.bluetooth_le"
         android:required="true" />
@@ -89,7 +120,7 @@
         any accidental plaintext request.
     -->
     <application
-        android:label="KeyGuard"
+        android:label="Find X"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="false">
@@ -119,9 +150,45 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!--
+            The class name is the plugin's and must not be changed — the plugin
+            starts this service by name.
+
+            `stopWithTask` is deliberately absent here and set from Dart
+            instead (see BackgroundService.configure), because it is the one
+            behaviour the owner cares about: swiping the app out of Recents must
+            not stop the monitoring. Only the notification's Stop button, the
+            Settings toggle, or a reboot ends it.
+        -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false" />
     </application>
 
     <queries>
+        <!--
+            Package visibility for url_launcher. From Android 11 an app cannot see
+            which other apps can handle an intent unless it declares the intent
+            here, and `canLaunchUrl` returns false for everything it cannot see —
+            so without this the "open in Google Maps" tap silently does nothing on
+            every modern phone.
+
+            The `<data>` elements are not optional decoration. An `<intent>` with
+            an action and no data matches only intents that carry no data at all,
+            which is never the case for a URI, so the schemes have to be named:
+            `geo:` for the map-point intent and `https:` for the universal Maps
+            URL used as the fallback.
+        -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
         <intent>
             <action android:name="android.intent.action.VIEW" />
         </intent>
