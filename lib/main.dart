@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:provider/provider.dart';
+import 'services/background_service.dart';
 import 'services/ble_service.dart';
 import 'services/network_info_service.dart';
 import 'services/notification_service.dart';
@@ -17,6 +19,13 @@ import 'widgets/phone_ringing_banner.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  // Opens the channel the foreground service's isolate uses to talk back to
+  // this one. Must happen before `runApp`, and must happen even when background
+  // running is switched off — without it the Stop button on the ongoing
+  // notification has nowhere to deliver its press. A no-op off Android.
+  if (BackgroundService.isSupported) {
+    FlutterForegroundTask.initCommunicationPort();
+  }
   runApp(const FindXProviders(child: FindXApp()));
 }
 

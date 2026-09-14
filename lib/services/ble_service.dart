@@ -14,6 +14,7 @@ import '../models/ble_device.dart';
 import '../models/event_model.dart';
 import '../models/history_retention.dart';
 import '../utils/coordinate_format.dart';
+import 'background_service.dart';
 import 'ble_protocol.dart';
 import 'ble_vendors.dart';
 import 'network_info_service.dart';
@@ -346,6 +347,13 @@ class BleService extends ChangeNotifier {
 
   bool _proximityWarningEnabled = true;
 
+  /// Whether the app holds its own process open once the owner leaves it.
+  ///
+  /// See services/background_service.dart for what that actually means. Mirrored
+  /// here rather than read from the store on demand so the Settings switch has
+  /// something synchronous to render.
+  bool _backgroundRunningEnabled = true;
+
   // ---------------------------------------------------------------------------
   // Signal
   // ---------------------------------------------------------------------------
@@ -614,6 +622,7 @@ class BleService extends ChangeNotifier {
       if (knownName != null && knownName.isNotEmpty) _deviceName = knownName;
       if (_knownDeviceId != null) _deviceId = _knownDeviceId!;
       _proximityWarningEnabled = store.proximityWarningEnabled;
+      _backgroundRunningEnabled = store.backgroundRunningEnabled;
 
       // Read before the history it governs, so the restore below can drop
       // anything already past its date rather than briefly showing it.
@@ -622,6 +631,11 @@ class BleService extends ChangeNotifier {
       _restoreHistory(store.historyJson);
 
       if (_demoModeEnabled) _startDemoMode();
+
+      // After the stored preference is known, and not awaited: starting a
+      // foreground service crosses a platform channel, and first paint should
+      // not wait on it.
+      unawaited(_syncBackgroundService());
 
       notifyListeners();
     } catch (e) {
@@ -1264,6 +1278,11 @@ class BleService extends ChangeNotifier {
       );
       unawaited(_notifications?.cancelOutOfRange() ?? Future.value());
 
+      // The ongoing background notice is a status line, so it changes with the
+      // status. Left alone it would still read "looking for your keyholder"
+      // while the keyholder was sitting connected.
+      _refreshBackgroundNotification();
+
       // Ask for a position immediately so the map has something real to show
       // instead of a placeholder.
       await requestLocation();
@@ -1537,6 +1556,8 @@ class BleService extends ChangeNotifier {
       );
     }
 
+    _refreshBackgroundNotification();
+
     _discovered.updateAll((_, d) => d.copyWith(isConnected: false));
     _rebuildScannedDevices();
 
@@ -1731,6 +1752,115 @@ class BleService extends ChangeNotifier {
     // than something the app should silently paper over.
     if (value && !kIsWeb) await _notifications?.requestPermission();
     notifyListeners();
+  }
+
+  bool get backgroundRunningEnabled => _backgroundRunningEnabled;
+
+  /// True on a platform where [backgroundRunningEnabled] can do anything.
+  ///
+  /// Android only. Exposed so the Settings screen can hide the switch rather
+  /// than offer one that silently does nothing.
+  bool get backgroundRunningSupported => BackgroundService.isSupported;
+
+  /// Turns background monitoring on or off.
+  ///
+  /// Switching it on asks for notification permission first, and treats a
+  /// refusal as a refusal: Android 13+ will technically start a foreground
+  /// service without it, but the service then runs with no visible
+  /// notification, which the system treats as a candidate for removal. Claiming
+  /// the feature is on in that state would be a lie the owner only discovers
+  /// when their keys are already gone.
+  Future<void> setBackgroundRunningEnabled(bool value) async {
+    if (!BackgroundService.isSupported) return;
+
+    if (value) {
+      BackgroundService.configure();
+      if (!await BackgroundService.hasNotificationPermission) {
+        await _settings?.setBackgroundPermissionAsked(true);
+        final granted = await BackgroundService.requestNotificationPermission();
+        if (!granted) {
+          _backgroundRunningEnabled = false;
+          _lastError =
+              'Find X needs permission to show a notification before it can '
+              'keep watching in the background.';
+          notifyListeners();
+          return;
+        }
+      }
+      final started = await BackgroundService.start(
+        connected: _isConnected,
+        deviceName: displayName,
+      );
+      _backgroundRunningEnabled = started;
+      if (!started) {
+        _lastError = 'This phone would not let Find X run in the background.';
+      }
+    } else {
+      await BackgroundService.stop();
+      _backgroundRunningEnabled = false;
+    }
+
+    await _settings?.setBackgroundRunningEnabled(_backgroundRunningEnabled);
+    notifyListeners();
+  }
+
+  /// Starts the background service if the owner has it switched on.
+  ///
+  /// Called once the settings have loaded, because on a cold start the stored
+  /// preference is not known until then.
+  Future<void> _syncBackgroundService() async {
+    if (!BackgroundService.isSupported) return;
+
+    // Registered whether or not the feature is on, because the service can
+    // outlive the app that started it: `stopWithTask` is false, so a swipe out
+    // of Recents leaves it running, and the owner may well press Stop on a
+    // relaunched app whose `_backgroundRunningEnabled` was loaded before this.
+    BackgroundService.listenForStopRequest(_onBackgroundStopRequested);
+
+    if (!_backgroundRunningEnabled) return;
+    BackgroundService.configure();
+
+    if (!await BackgroundService.hasNotificationPermission) {
+      // Asked exactly once, on the first launch that finds the feature on.
+      //
+      // It has to be asked *somewhere*: the feature is on by default, Android
+      // 13+ will run a foreground service with no visible notification but
+      // treats one as a candidate for removal, and a switch that reads "on"
+      // while nothing is watching is the failure this whole feature exists to
+      // prevent. Asking again on later launches would be nagging for something
+      // already declined — the Settings switch is where they can change their
+      // mind.
+      if (_settings?.backgroundPermissionAsked ?? true) return;
+      await _settings?.setBackgroundPermissionAsked(true);
+      if (!await BackgroundService.requestNotificationPermission()) return;
+    }
+
+    await BackgroundService.start(
+      connected: _isConnected,
+      deviceName: displayName,
+    );
+  }
+
+  /// The owner pressed Stop on the ongoing notification.
+  ///
+  /// The service isolate has already stopped the service; what is left is to
+  /// make that stick. Without persisting it here the app would start monitoring
+  /// again on next launch, and "stop" would have meant "until you next open the
+  /// app" — not what the button says.
+  void _onBackgroundStopRequested() {
+    if (!_backgroundRunningEnabled) return;
+    _backgroundRunningEnabled = false;
+    unawaited(_settings?.setBackgroundRunningEnabled(false) ?? Future.value());
+    notifyListeners();
+  }
+
+  /// Keeps the ongoing notification's text honest as the link comes and goes.
+  void _refreshBackgroundNotification() {
+    if (!_backgroundRunningEnabled) return;
+    unawaited(BackgroundService.updateLinkState(
+      connected: _isConnected,
+      deviceName: displayName,
+    ));
   }
 
   // ===========================================================================
@@ -2540,6 +2670,10 @@ class BleService extends ChangeNotifier {
     _authSubscription?.cancel();
     _bondSubscription?.cancel();
     _authFrames.close();
+    // Unregistered but the service is deliberately NOT stopped: it exists
+    // precisely to outlive this object. Leaving the callback attached would aim
+    // a Stop press at a disposed ChangeNotifier.
+    BackgroundService.stopListeningForStopRequest();
     // The scan was previously left running after disposal, draining the battery
     // for as long as the process lived.
     if (!kIsWeb && FlutterBluePlus.isScanningNow) {

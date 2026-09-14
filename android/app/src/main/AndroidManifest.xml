@@ -82,6 +82,32 @@
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+        Background running.
+
+        Without a foreground service this app is a cached process, and Android
+        reclaims those first when memory is short — which is why leaving the app
+        killed the BLE link, the proximity warning and every notification with
+        it. The service holds the process open; the main isolate's connection
+        and timers then carry on untouched.
+
+        The type is `connectedDevice`, not `dataSync`, and that choice has
+        teeth: from Android 15 a dataSync service is stopped after roughly six
+        hours in any 24-hour window. A key finder that silently stops watching
+        after six hours is worse than one that never offered to. This app is
+        genuinely interacting with a connected Bluetooth device, so the accurate
+        type is also the one without the cap.
+
+        REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is asked for at runtime and only
+        when the owner turns the feature on. It is not requested at install and
+        the app works without it — but on phones with a manufacturer battery
+        manager on top of stock Android (Xiaomi, Oppo, Vivo, Huawei) it is
+        frequently the difference between the service surviving and not.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Bluetooth Low Energy is required, not optional: without it there is no app. -->
     <uses-feature android:name="android.hardware.bluetooth_le"
         android:required="true" />
@@ -124,6 +150,21 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!--
+            The class name is the plugin's and must not be changed — the plugin
+            starts this service by name.
+
+            `stopWithTask` is deliberately absent here and set from Dart
+            instead (see BackgroundService.configure), because it is the one
+            behaviour the owner cares about: swiping the app out of Recents must
+            not stop the monitoring. Only the notification's Stop button, the
+            Settings toggle, or a reboot ends it.
+        -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false" />
     </application>
 
     <queries>

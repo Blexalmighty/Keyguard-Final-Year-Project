@@ -39,6 +39,8 @@ class SettingsStore {
   static const String _kHistoryRetention = 'history_retention';
   static const String _kNicknamePrefix = 'device_nickname_';
   static const String _kProximityWarning = 'proximity_warning_enabled';
+  static const String _kBackgroundRunning = 'background_running_enabled';
+  static const String _kBackgroundAsked = 'background_permission_asked';
   static const String _kLastDeviceId = 'last_device_id';
   static const String _kLastDeviceName = 'last_device_name';
 
@@ -104,6 +106,29 @@ class SettingsStore {
   bool get wifiCloudSyncEnabled => _prefs.getBool(_kWifiCloudSync) ?? true;
   Future<void> setWifiCloudSyncEnabled(bool v) =>
       _prefs.setBool(_kWifiCloudSync, v);
+
+  /// Whether the app should hold itself open after the owner leaves the screen.
+  ///
+  /// Defaults to true. The app's entire purpose is to notice something while
+  /// nobody is looking at it — a key finder that only watches while its screen
+  /// is open is a status display, not an alarm. The cost is one silent ongoing
+  /// notification, which Android requires and which doubles as the link status.
+  bool get backgroundRunningEnabled =>
+      _prefs.getBool(_kBackgroundRunning) ?? true;
+  Future<void> setBackgroundRunningEnabled(bool v) =>
+      _prefs.setBool(_kBackgroundRunning, v);
+
+  /// Whether the owner has already been asked for the notification permission
+  /// that background running needs.
+  ///
+  /// Tracked separately from the permission itself so a refusal is remembered
+  /// as a *decision*. Without this the app could not tell "never asked" from
+  /// "said no", and would re-prompt on every single launch — which is how an
+  /// app teaches its owner to deny things reflexively.
+  bool get backgroundPermissionAsked =>
+      _prefs.getBool(_kBackgroundAsked) ?? false;
+  Future<void> setBackgroundPermissionAsked(bool v) =>
+      _prefs.setBool(_kBackgroundAsked, v);
 
   HistoryRetention get historyRetention =>
       HistoryRetention.fromStorage(_prefs.getString(_kHistoryRetention));

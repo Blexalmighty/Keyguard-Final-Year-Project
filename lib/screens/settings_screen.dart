@@ -9,6 +9,7 @@ import '../models/alert_pattern.dart';
 import '../models/ble_device.dart';
 import '../models/history_retention.dart';
 import '../models/phone_alert_tone.dart';
+import '../services/background_service.dart';
 import '../services/ble_service.dart';
 import '../services/pairing_service.dart';
 import '../services/phone_ringer_service.dart';
@@ -67,6 +68,10 @@ class SettingsScreen extends StatelessWidget {
                           _AppearanceCard(bleService: bleService),
                           const _SectionLabel('ALERTS & LOGGING'),
                           _PreferencesCard(bleService: bleService),
+                          if (bleService.backgroundRunningSupported) ...[
+                            const _SectionLabel('BACKGROUND'),
+                            _BackgroundCard(bleService: bleService),
+                          ],
                           const _SectionLabel('KEYHOLDER NETWORK'),
                           _NetworkCard(bleService: bleService),
                           const _SectionLabel('SECURITY'),
@@ -1311,9 +1316,142 @@ class _PreferencesCard extends StatelessWidget {
 }
 
 // =============================================================================
-// Keyholder network
+// Background running
 // =============================================================================
 
+/// The switch that decides whether the app survives being left.
+///
+/// Stateful for one reason: the battery-optimisation exemption is a system
+/// setting, not an app one. Nothing notifies us when it changes, and the owner
+/// changes it by leaving for a system dialog and coming back — so its value has
+/// to be re-read on return rather than held in [BleService].
+class _BackgroundCard extends StatefulWidget {
+  const _BackgroundCard({required this.bleService});
+
+  final BleService bleService;
+
+  @override
+  State<_BackgroundCard> createState() => _BackgroundCardState();
+}
+
+class _BackgroundCardState extends State<_BackgroundCard> {
+  /// Null until the first check comes back, so the row can stay quiet rather
+  /// than flash "not exempted" at an owner who already granted it.
+  bool? _batteryExempt;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshBatteryState();
+  }
+
+  Future<void> _refreshBatteryState() async {
+    if (!BackgroundService.isSupported) return;
+    final exempt = await BackgroundService.isBatteryOptimisationDisabled;
+    if (!mounted) return;
+    setState(() => _batteryExempt = exempt);
+  }
+
+  Future<void> _requestBatteryExemption() async {
+    final granted = await BackgroundService.requestDisableBatteryOptimisation();
+    if (!mounted) return;
+    setState(() => _batteryExempt = granted);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    final on = widget.bleService.backgroundRunningEnabled;
+
+    return _Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _Toggle(
+            icon: Icons.shield_moon_rounded,
+            title: 'Keep Watching in Background',
+            subtitle:
+                'Stay connected after you leave the app, so alerts still reach '
+                'you. Ends only when you tap Stop on the notification or '
+                'restart your phone.',
+            value: on,
+            onChanged: (v) async {
+              await widget.bleService.setBackgroundRunningEnabled(v);
+              if (v) await _refreshBatteryState();
+            },
+          ),
+
+          // The exemption only matters while the feature is on, and asking for
+          // it before then would be asking the owner to grant something for a
+          // feature they have not switched on.
+          if (on && _batteryExempt == false) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: p.warningSoft,
+                borderRadius: BorderRadius.circular(11),
+                border: Border.all(color: p.warning.withValues(alpha: 0.35)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.battery_alert_rounded,
+                          size: 15, color: p.warning),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          'Your phone may still close Find X to save battery. '
+                          'Allowing it to run unrestricted is what keeps the '
+                          'alerts working overnight.',
+                          style: AppTypography.bodyMd(
+                              color: p.onSurfaceVariant),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _requestBatteryExemption,
+                      icon: const Icon(Icons.battery_saver_rounded, size: 17),
+                      label: const Text('Allow unrestricted battery use'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          if (on && _batteryExempt == true) ...[
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Icon(Icons.check_circle_rounded, size: 15, color: p.success),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Text(
+                    'Battery optimisation is off for Find X, so this phone '
+                    'should not close it.',
+                    style: AppTypography.bodyMd(color: p.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Keyholder network
+// =============================================================================
 /// Wi-Fi, framed correctly.
 ///
 /// This is not a second way for the phone to reach the keyholder, and it is not
