@@ -219,6 +219,12 @@ class BleService extends ChangeNotifier {
   int _autoConnectFailures = 0;
   static const int _maxAutoConnectAttempts = 3;
 
+  /// Set just before we call `device.disconnect()` ourselves, so the
+  /// `connectionState` listener — which fires asynchronously and otherwise has
+  /// no way to tell a deliberate disconnect from a dropped link — knows not to
+  /// resume the hunt. Cleared once that disconnect has been handled.
+  bool _explicitDisconnect = false;
+
   /// True while the app should keep re-arming the scan until it finds the
   /// keyholder. See [beginContinuousScan].
   bool _keepHunting = false;
@@ -1069,9 +1075,17 @@ class BleService extends ChangeNotifier {
       );
       unawaited(_notifications?.cancelOutOfRange() ?? Future.value());
 
-      // Ask for a position immediately so the map has something real to show
-      // instead of a placeholder.
-      await requestLocation();
+      // Not requested here. On a claimed keyholder — the common case — the
+      // firmware refuses every data-channel command, including GET_LOC, until
+      // the auth handshake completes (see DataCharCallbacks::onWrite in the
+      // sketch), which cannot have happened yet this early in a raw BLE
+      // connect. That race meant this call was answered with ERR_NOT_AUTHED
+      // on essentially every reconnect, which both left the map on "No GPS
+      // fix" and flipped ownership state to authFailed before the real
+      // handshake even started. The request now goes out once we know the
+      // device will actually answer it: right after AUTH_OK for a claimed
+      // keyholder, or right after STATUS:UNCLAIMED for one that needs no
+      // auth at all.
     } catch (e) {
       _lastError = 'Could not connect: $e';
       await _teardownSession();
@@ -1280,7 +1294,10 @@ class BleService extends ChangeNotifier {
     _connectionStateSubscription = device.connectionState.listen((state) async {
       if (state == BluetoothConnectionState.disconnected) {
         if (_isConnected || _isConnecting) {
-          await _handleDisconnected(logEvent: _isConnected);
+          await _handleDisconnected(
+            logEvent: _isConnected,
+            resumeHunting: !_explicitDisconnect,
+          );
         }
       }
     }, onError: (Object e) => debugPrint('connectionState error: $e'));
@@ -1554,15 +1571,23 @@ class BleService extends ChangeNotifier {
 
     if (data == BleResponses.statusUnclaimed) {
       _ownershipState = OwnershipState.unclaimed;
+      // No auth required for an unclaimed device — GET_LOC is answered as soon
+      // as this arrives, so this is the earliest safe point to ask for it.
+      unawaited(requestLocation());
     } else if (data.startsWith(BleResponses.authReqPrefix)) {
       _ownershipState = OwnershipState.authenticating;
     } else if (data == BleResponses.authOk) {
       _ownershipState = OwnershipState.authenticated;
       _lastError = '';
-      // First moment the device will accept a command. The cadence is pushed
-      // here rather than at connect time because on a claimed device every
-      // command before AUTH_OK is refused outright.
+      // First moment the device will accept a command. The cadence and an
+      // initial location are requested here rather than at connect time
+      // because on a claimed device every command before AUTH_OK is refused
+      // outright with ERR_NOT_AUTHED — which is exactly what used to happen
+      // to the GET_LOC sent from connectToDevice(), since that write always
+      // raced ahead of this handshake. The app was then left showing "No GPS
+      // fix" until the firmware happened to push a fix on its own.
       unawaited(pushAlertPattern());
+      unawaited(requestLocation());
     } else if (data == BleResponses.authFail) {
       _ownershipState = OwnershipState.authFailed;
       _lastError = 'The keyholder refused this phone.';
@@ -1804,6 +1829,13 @@ class BleService extends ChangeNotifier {
       return;
     }
 
+    // Marked before the disconnect call itself: `device.disconnect()` makes the
+    // connectionState stream emit `disconnected` asynchronously, and that
+    // listener (`_watchConnectionState`) used to run with its default
+    // `resumeHunting: true` — re-arming the scan and reconnecting within
+    // seconds of the owner pressing Disconnect, before this method's own
+    // `resumeHunting: false` call below ever got a chance to matter.
+    _explicitDisconnect = true;
     try {
       // Awaited, unlike before — the fire-and-forget call meant the UI could
       // repaint as "disconnected" while the link was still up.
@@ -1816,6 +1848,7 @@ class BleService extends ChangeNotifier {
     // The connectionState listener normally handles this; call it directly too
     // so state is correct even if that event is missed.
     await _handleDisconnected(logEvent: true, resumeHunting: false);
+    _explicitDisconnect = false;
   }
 
   Future<void> toggleDeviceConnection() async {
