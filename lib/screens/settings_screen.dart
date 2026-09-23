@@ -18,16 +18,14 @@ import '../widgets/app_logo_tile.dart';
 import '../widgets/motion.dart';
 import '../widgets/section_label.dart';
 import 'pairing_screen.dart';
-import 'wifi_setup_screen.dart';
 
 /// Settings: device info, calibration, preferences, ownership, demo mode.
 ///
-/// This is the one screen that mentions Wi-Fi, and it does so as a *device*
-/// setting rather than a connection mode. The phone always reaches the keyholder
-/// over Bluetooth; giving the keyholder a network only widens how far its last
-/// reported position can travel. Framing it anywhere else — as a second way to
-/// connect, or as a tab beside Bluetooth — would offer a choice that does not
-/// exist.
+/// There is no network section any more. This screen used to carry a Cloud
+/// Reporting switch and a button that sent the keyholder Wi-Fi credentials,
+/// which together implied the keyholder could be reached over something other
+/// than Bluetooth. It cannot, and nothing in the app depends on it: the phone
+/// talks to the keyholder over BLE and stores the log itself.
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
@@ -68,12 +66,11 @@ class SettingsScreen extends StatelessWidget {
                           _AppearanceCard(bleService: bleService),
                           const _SectionLabel('ALERTS & LOGGING'),
                           _PreferencesCard(bleService: bleService),
+                          _RetentionCard(bleService: bleService),
                           if (bleService.backgroundRunningSupported) ...[
                             const _SectionLabel('BACKGROUND'),
                             _BackgroundCard(bleService: bleService),
                           ],
-                          const _SectionLabel('KEYHOLDER NETWORK'),
-                          _NetworkCard(bleService: bleService),
                           const _SectionLabel('SECURITY'),
                           _OwnershipCard(bleService: bleService),
                           _DemoModeCard(bleService: bleService),
@@ -1404,7 +1401,7 @@ class _BackgroundCardState extends State<_BackgroundCard> {
                       const SizedBox(width: 9),
                       Expanded(
                         child: Text(
-                          'Your phone may still close Find X to save battery. '
+                          'Your phone may still close FindX to save battery. '
                           'Allowing it to run unrestricted is what keeps the '
                           'alerts working overnight.',
                           style: AppTypography.bodyMd(
@@ -1435,7 +1432,7 @@ class _BackgroundCardState extends State<_BackgroundCard> {
                 const SizedBox(width: 9),
                 Expanded(
                   child: Text(
-                    'Battery optimisation is off for Find X, so this phone '
+                    'Battery optimisation is off for FindX, so this phone '
                     'should not close it.',
                     style: AppTypography.bodyMd(color: p.onSurfaceVariant),
                   ),
@@ -1450,91 +1447,28 @@ class _BackgroundCardState extends State<_BackgroundCard> {
 }
 
 // =============================================================================
-// Keyholder network
+// History retention
 // =============================================================================
-/// Wi-Fi, framed correctly.
+/// Wraps [_RetentionPicker] in a card of its own.
 ///
-/// This is not a second way for the phone to reach the keyholder, and it is not
-/// a transport the user selects. It is a capability given to the *device*, once,
-/// so that it can report its own position when the phone is nowhere near it.
-/// The app's connection state never mentions it.
-class _NetworkCard extends StatelessWidget {
-  const _NetworkCard({required this.bleService});
+/// It used to sit inside a "Keyholder network" card, beneath a Cloud Reporting
+/// switch and a button that sent the keyholder Wi-Fi credentials. Both of those
+/// are gone: the keyholder is a Bluetooth device and nothing it knows travels
+/// anywhere but to this phone. The expiry control is not gone, and it belongs
+/// with logging — the log is a record of where the owner has been, and the
+/// honest way to offer that is with a date on which it disappears.
+class _RetentionCard extends StatelessWidget {
+  const _RetentionCard({required this.bleService});
 
   final BleService bleService;
 
   @override
   Widget build(BuildContext context) {
-    final p = AppPalette.of(context);
-    final syncOn = bleService.wifiCloudSyncEnabled;
-
-    return _Card(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _Toggle(
-            icon: Icons.cloud_upload_rounded,
-            title: 'Cloud Reporting',
-            subtitle:
-                'Let the keyholder upload its position when it has a network.',
-            value: syncOn,
-            onChanged: bleService.setWifiCloudSyncEnabled,
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: p.surfaceAlt,
-              borderRadius: BorderRadius.circular(11),
-              border: Border.all(color: p.border),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.info_outline_rounded, size: 15, color: p.muted),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: Text(
-                    bleService.wifiStatusMessage,
-                    style: AppTypography.bodyMd(color: p.onSurfaceVariant),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          _RetentionPicker(bleService: bleService),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              // Sending credentials requires a verified owner link — the
-              // provisioning characteristic is encrypted and write-only, and the
-              // firmware drops WIFI_SET from an unauthenticated session.
-              onPressed: bleService.isConnected
-                  ? () => WifiSetupScreen.open(context)
-                  : null,
-              icon: const Icon(Icons.wifi_rounded, size: 17),
-              label: Text(
-                bleService.isConnected
-                    ? 'Set up the keyholder’s Wi-Fi'
-                    : 'Connect to set up Wi-Fi',
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+    return _Card(child: _RetentionPicker(bleService: bleService));
   }
 }
 
 /// How long location history is kept before the app deletes it by itself.
-///
-/// Lives under Cloud Reporting because that is where the owner is already
-/// thinking about what leaves the phone and what is kept. The log is a record of
-/// where the keyholder — and so its owner — has been, and the honest way to
-/// offer that is with an expiry date the owner sets, not an archive that grows
-/// forever because nobody thought about it.
 ///
 /// Laid out as a row of chips rather than a dropdown: there are four choices,
 /// they are all short, and the current one should be readable without tapping

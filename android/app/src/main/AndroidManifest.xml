@@ -120,7 +120,7 @@
         any accidental plaintext request.
     -->
     <application
-        android:label="Find X"
+        android:label="FindX"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="false">

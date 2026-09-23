@@ -1,4 +1,4 @@
-# KeyGuard firmware — ESP32-C3 Super Mini
+# FindMe firmware — ESP32-C3 Super Mini
 
 Sketch: [`keyguard_esp32c3/keyguard_esp32c3.ino`](keyguard_esp32c3/keyguard_esp32c3.ino)
 
@@ -100,7 +100,7 @@ the display object.
 ## 4. First boot and claiming
 
 1. Flash. The OLED shows `UNCLAIMED / PRESS BTN / TO PAIR` and the device
-   advertises as `KeyGuard`. The name is the same once claimed — ownership is
+   advertises as `FindMe`. The name is the same once claimed — ownership is
    advertised as a state byte in the scan response, not in the name, because a
    name long enough to distinguish the two does not fit in the advertising
    packet beside the service UUID.
@@ -113,7 +113,7 @@ the display object.
 4. **Press and hold the button on the device**, then tap **Claim this
    keyholder** while still holding it.
 5. The OLED shows `PAIRED / OWNER SET`. The device now advertises as the generic
-   name `KeyGuard` and is bound to that phone.
+   name `FindMe` and is bound to that phone.
 
 The button hold in step 4 is the point of the whole design: it binds the right
 to claim to physical possession, so nobody can claim your keyholder from across
@@ -209,7 +209,7 @@ Dropping Upload Speed to 115200 helps on long or unshielded cables.
 
 ## 10. Known limitations
 
-- **BLE address is static.** Advertising the neutral name `KeyGuard` once claimed
+- **BLE address is static.** Advertising the neutral name `FindMe` once claimed
   removes the obvious identifier, but a fixed MAC still lets a determined
   observer follow the *owner*. Full mitigation needs resolvable private
   addresses. See `docs/SECURITY_MODEL.md`.

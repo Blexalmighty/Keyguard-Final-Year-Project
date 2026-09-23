@@ -1,5 +1,5 @@
 name: keyguard
-description: "KeyGuard — a two-way BLE proximity alert system for personal item recovery. Flutter app for an ESP32-C3 keyholder."
+description: "FindX — a two-way BLE proximity alert system for personal item recovery. Flutter app for the FindMe ESP32-C3 keyholder."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

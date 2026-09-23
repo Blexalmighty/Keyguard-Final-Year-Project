@@ -18,11 +18,11 @@ void main() {
     await tester.pumpWidget(const FindXProviders(child: FindXApp()));
     await tester.pump();
 
-    // 'Find X' is the app; the hardware is 'Find Me'. The wordmark also
+    // 'FindX' is the app; the hardware is 'FindMe'. The wordmark also
     // dropped the transport when the Bluetooth-vs-Wi-Fi split was removed: the
     // app no longer presents a radio as something the user chooses, so naming
     // one in the title was the last place that framing survived.
-    expect(find.text('Find X'), findsWidgets);
+    expect(find.text('FindX'), findsWidgets);
 
     // The previous version of this test asserted findsWidgets on 'Connected'.
     // It passed only because BleService set `_isConnected = true` in its field
@@ -60,7 +60,7 @@ void main() {
     // And the body must actually get the rest. The Home screen's own header is
     // the first thing in it, so if that is not above the bar, the body was
     // squeezed to nothing.
-    expect(tester.getRect(find.text('Find X').first).top,
+    expect(tester.getRect(find.text('FindX').first).top,
         lessThan(navBar.top));
   });
 

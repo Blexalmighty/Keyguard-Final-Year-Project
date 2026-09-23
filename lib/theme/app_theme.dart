@@ -1,4 +1,4 @@
-/// Find X's design system.
+/// FindX's design system.
 ///
 /// Three things live here and nothing else should duplicate them:
 ///

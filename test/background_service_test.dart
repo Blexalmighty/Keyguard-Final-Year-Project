@@ -25,7 +25,7 @@ void main() {
     expect(await BackgroundService.isBatteryOptimisationDisabled, isFalse);
     expect(await BackgroundService.requestDisableBatteryOptimisation(), isFalse);
     expect(
-      await BackgroundService.start(connected: true, deviceName: 'Find Me'),
+      await BackgroundService.start(connected: true, deviceName: 'FindMe'),
       isFalse,
     );
     expect(await BackgroundService.stop(), isFalse);
@@ -33,7 +33,7 @@ void main() {
     // These return void, so the assertion is simply that they survive.
     BackgroundService.configure();
     await BackgroundService.updateLinkState(
-        connected: false, deviceName: 'Find Me');
+        connected: false, deviceName: 'FindMe');
     BackgroundService.listenForStopRequest(() {});
     BackgroundService.stopListeningForStopRequest();
   });

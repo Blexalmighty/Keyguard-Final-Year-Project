@@ -28,7 +28,6 @@ class SettingsStore {
   static const String _kPhoneToneName = 'phone_alert_tone_name';
   static const String _kPhoneVibrate = 'phone_alert_vibrate';
   static const String _kSaveGpsOnDisconnect = 'save_gps_on_disconnect';
-  static const String _kWifiCloudSync = 'wifi_cloud_sync_enabled';
   static const String _kDarkMode = 'dark_mode_enabled';
   static const String _kDemoMode = 'demo_mode_enabled';
   static const String _kAlertDistance = 'alert_distance_threshold';
@@ -102,10 +101,6 @@ class SettingsStore {
   bool get saveGpsOnDisconnect => _prefs.getBool(_kSaveGpsOnDisconnect) ?? true;
   Future<void> setSaveGpsOnDisconnect(bool v) =>
       _prefs.setBool(_kSaveGpsOnDisconnect, v);
-
-  bool get wifiCloudSyncEnabled => _prefs.getBool(_kWifiCloudSync) ?? true;
-  Future<void> setWifiCloudSyncEnabled(bool v) =>
-      _prefs.setBool(_kWifiCloudSync, v);
 
   /// Whether the app should hold itself open after the owner leaves the screen.
   ///
@@ -205,7 +200,7 @@ class SettingsStore {
 
   // --- Device nicknames ---
   //
-  // A claimed keyholder advertises the generic name "Find Me" on purpose: a
+  // A claimed keyholder advertises the generic name "FindMe" on purpose: a
   // per-unit name in the advertising packet lets a passer-by single out *this*
   // device, and by extension follow its owner around. That is the anti-stalking
   // property in docs/SECURITY_MODEL.md and it is not negotiable.
@@ -213,7 +208,7 @@ class SettingsStore {
   // The consequence is that every claimed keyholder looks identical on screen.
   // The fix is a nickname that lives *on the phone* and never goes near the
   // radio: the owner sees "Ife's keys", a stranger scanning the room still sees
-  // nothing but "Find Me". Same approach Apple uses for AirTags.
+  // nothing but "FindMe". Same approach Apple uses for AirTags.
   //
   // Keyed by BLE remote id, so a phone that owns two keyholders names them
   // independently.

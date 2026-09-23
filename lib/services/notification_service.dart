@@ -209,7 +209,7 @@ class NotificationService {
         connected ? '$deviceName connected' : '$deviceName disconnected',
         connected
             ? 'In range and responding.'
-            : 'Out of range or switched off. Find X is looking for it.',
+            : 'Out of range or switched off. FindX is looking for it.',
         NotificationDetails(
           android: AndroidNotificationDetails(
             _linkChannelId,

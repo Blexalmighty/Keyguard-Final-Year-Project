@@ -1,4 +1,4 @@
-/// The Find X BLE wire contract.
+/// The FindX BLE wire contract.
 ///
 /// This file is the single source of truth for every UUID, command string and
 /// response prefix exchanged with the keyholder. It has a mirror-image set of
@@ -25,8 +25,11 @@ class BleUuids {
   /// Ownership handshake channel. write + notify.
   static const String authChar = 'beb5483e-36e1-4688-b7f5-ea07361b26a9';
 
-  /// Wi-Fi provisioning channel. write only, requires an encrypted link.
-  static const String provChar = 'beb5483e-36e1-4688-b7f5-ea07361b26aa';
+  // There was a third characteristic here, `provChar`, carrying Wi-Fi
+  // credentials to the keyholder. It is gone: the keyholder is a Bluetooth
+  // device and nothing else now, so the app never writes to it. The firmware
+  // still exposes the characteristic for older phones; leaving the UUID
+  // undeclared here is what stops this app from using it.
 }
 
 /// Advertised device name.
@@ -39,13 +42,13 @@ class BleNames {
   /// cannot single out *this* keyholder (and by extension its owner) from a
   /// scan. See docs/SECURITY_MODEL.md.
   ///
-  /// Seven characters, and the ceiling is eight. A legacy advertisement is 31
+  /// Six characters, and the ceiling is eight. A legacy advertisement is 31
   /// bytes: 18 for the 128-bit service UUID, 3 for the flags, leaving 10 for a
   /// 2-byte AD header plus the name. Firmware that advertised a longer name had
   /// it silently relegated to the scan response by the ESP32 BLE library —
   /// which is why such a device turned up in the scan list as a row with no
   /// name at all. `test/auth_test.dart` holds that budget.
-  static const String keyholder = 'Find Me';
+  static const String keyholder = 'FindMe';
 
   /// What firmware older than the rename advertised.
   ///
@@ -54,6 +57,16 @@ class BleNames {
   /// reflashed, and "the app stopped seeing my device" is a worse outcome than
   /// carrying one extra string. Nothing infers ownership from it.
   static const String legacyKeyguard = 'KeyGuard';
+
+  /// The spaced spelling, which shipped briefly between `KeyGuard` and
+  /// [keyholder].
+  ///
+  /// One character apart from the current name and easy to dismiss as
+  /// cosmetic — but BLE matches advertised names byte for byte, so a board
+  /// flashed during that window is invisible to an app that only knows
+  /// `FindMe`. Same reasoning as [legacyKeyguard]: a string costs nothing,
+  /// hardware that has stopped being recognised costs an afternoon.
+  static const String legacySpaced = 'Find Me';
 
   /// What firmware older than the single-name change advertised while unclaimed.
   ///
@@ -66,6 +79,7 @@ class BleNames {
   static const List<String> candidates = [
     keyholder,
     legacyKeyguard,
+    legacySpaced,
     legacyUnclaimed,
   ];
 }
@@ -112,6 +126,25 @@ class BleCommands {
   /// low-battery chirp.
   static const String alertSetPrefix = 'ALERT_SET:';
 
+  /// `PHONE_LOC:<lat>,<lng>` — where the *phone* is, pushed to the keyholder.
+  ///
+  /// This is the frame that makes the keyholder's own screen useful. The board
+  /// has no GPS module of its own on most builds, so without this its location
+  /// screen has nothing to show and sits on "NO GPS FIX" forever — which is
+  /// exactly how it behaved before this existed.
+  ///
+  /// The direction is worth being clear about: every other position in this
+  /// protocol travels keyholder → phone. This one goes phone → keyholder, and
+  /// it answers a different question. "Where are my keys" is answered by the
+  /// app; "where was my phone last" is answered by the little screen on the
+  /// keyholder, which is what you read when the phone is the thing you have
+  /// lost. Six decimal places, matching [BleResponses.locPrefix], so the two
+  /// sides parse identically.
+  ///
+  /// Requires an authenticated session, like every other data command — the
+  /// owner's position is not something an unpaired stranger may write.
+  static const String phoneLocPrefix = 'PHONE_LOC:';
+
   // --- Auth characteristic ---
   /// Take ownership of an unclaimed keyholder. Accepted only while the physical
   /// button is held down. Format: `CLAIM:<ownerId hex>`.
@@ -123,13 +156,6 @@ class BleCommands {
 
   /// Release ownership. Requires an authenticated session.
   static const String unclaim = 'UNCLAIM';
-
-  // --- Provisioning characteristic (requires an authenticated session) ---
-  /// Format: `WIFI_SET:<ssid base64>:<password base64>`.
-  ///
-  /// Base64 rather than raw text so that a `:` or non-ASCII character in either
-  /// field cannot break the firmware's parser.
-  static const String wifiSetPrefix = 'WIFI_SET:';
 }
 
 /// Notifications the keyholder sends to the app.
@@ -188,13 +214,6 @@ class BleResponses {
 
   /// A command was sent before the session was authenticated.
   static const String notAuthed = 'ERR_NOT_AUTHED';
-
-  // --- Provisioning characteristic ---
-  /// `WIFI_OK:<ip address>`
-  static const String wifiOkPrefix = 'WIFI_OK:';
-
-  /// `WIFI_FAIL:<reason>`
-  static const String wifiFailPrefix = 'WIFI_FAIL:';
 }
 
 /// Sizes and timings that both sides must agree on.

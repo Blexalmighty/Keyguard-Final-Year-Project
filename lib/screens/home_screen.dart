@@ -17,9 +17,9 @@ import '../widgets/signal_bar.dart';
 /// last seen.
 ///
 /// Note what is *not* here: any mention of which radio the connection is using.
-/// There is one connection state. Whether a given reading arrived over BLE or was
-/// reported by the keyholder through Wi-Fi is not a decision the user can make or
-/// needs to know, so surfacing it would only add a control with no action behind
+/// There is one connection state, over Bluetooth, and nothing else. An earlier
+/// version hinted at a second transport; the keyholder is a Bluetooth device
+/// and saying so once, here, is cheaper than a control with no action behind
 /// it.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -157,7 +157,7 @@ class _AppBar extends StatelessWidget {
                 children: [
                   const AppLogoTile(),
                   const SizedBox(width: 10),
-                  const AppWordmark('Find X'),
+                  const AppWordmark('FindX'),
                 ],
               ),
               BatteryPill(
@@ -258,7 +258,7 @@ class _ConnectionCard extends StatelessWidget {
                     // link there is no keyholder to name. The name is stored on
                     // the phone for the anti-stalking reason in
                     // SettingsStore.nicknameFor: a claimed keyholder
-                    // deliberately advertises the generic "Find Me", so the
+                    // deliberately advertises the generic "FindMe", so the
                     // radio must never carry the owner's label.
                     if (connected)
                       GestureDetector(

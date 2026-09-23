@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Find X</string>
+	<string>FindX</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,7 +15,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>keyguard</string>
+	<string>FindX</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -56,9 +56,9 @@
 		than naming the API.
 	-->
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Find X uses Bluetooth to stay connected to your Find Me keyholder and warn you when it moves out of range.</string>
+	<string>FindX uses Bluetooth to stay connected to your FindMe keyholder and warn you when it moves out of range.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Find X uses Bluetooth to stay connected to your Find Me keyholder and warn you when it moves out of range.</string>
+	<string>FindX uses Bluetooth to stay connected to your FindMe keyholder and warn you when it moves out of range.</string>
 
 	<!--
 		The phone's own GPS, which is what stamps a position on every connect,
@@ -66,7 +66,7 @@
 		read at the moment the link changes, not tracked continuously.
 	-->
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Find X records where you were when your keyholder connected or disconnected, so you can find the last place it was with you.</string>
+	<string>FindX records where you were when your keyholder connected or disconnected, so you can find the last place it was with you.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

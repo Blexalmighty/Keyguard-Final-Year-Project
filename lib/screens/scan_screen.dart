@@ -253,7 +253,7 @@ class _ScanAppBar extends StatelessWidget {
                 children: [
                   const AppLogoTile(),
                   const SizedBox(width: 10),
-                  const AppWordmark('Find X'),
+                  const AppWordmark('FindX'),
                 ],
               ),
 

@@ -62,7 +62,7 @@ class _PasskeyEntrySheetState extends State<PasskeyEntrySheet> {
       _error = bleService.lastError.isNotEmpty
           ? bleService.lastError
           : 'Pairing was cancelled or the code did not match. Check the number '
-              'on your Find Me and try again.';
+              'on your FindMe and try again.';
     });
   }
 
@@ -128,7 +128,7 @@ class _PasskeyEntrySheetState extends State<PasskeyEntrySheet> {
             const SizedBox(height: 16),
 
             Text(
-              'Your Find Me is showing a six-digit code on its screen.',
+              'Your FindMe is showing a six-digit code on its screen.',
               style: AppTypography.bodyLg(color: p.onSurface),
             ),
             const SizedBox(height: 8),
@@ -141,7 +141,7 @@ class _PasskeyEntrySheetState extends State<PasskeyEntrySheet> {
                       'the operating system can accept a Bluetooth passkey, '
                       'which is what stops an app from pairing behind your back.'
                   : 'iOS handles Bluetooth pairing itself. When the code appears '
-                      'on your Find Me, enter it in the system prompt that '
+                      'on your FindMe, enter it in the system prompt that '
                       'iOS shows. This app cannot see or supply it.',
               style: AppTypography.bodyMd(color: p.onSurfaceVariant),
             ),
@@ -287,7 +287,7 @@ class _OledMockState extends State<_OledMock>
             ),
           ),
           const SizedBox(height: 6),
-          Text('on your Find Me\'s screen',
+          Text('on your FindMe\'s screen',
               style: AppTypography.microLabel(color: const Color(0xFF6B7280))),
         ],
       ),

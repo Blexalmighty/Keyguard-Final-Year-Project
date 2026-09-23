@@ -254,7 +254,7 @@ class _DeviceHeader extends StatelessWidget {
               children: [
                 Text(
                   // displayNameFor, not device.name: a claimed keyholder
-                  // advertises the generic "Find Me", so the name on this
+                  // advertises the generic "FindMe", so the name on this
                   // header should be *this phone's* name for it when there is
                   // one (see SettingsStore.nicknameFor).
                   bleService.displayNameFor(device.id, advertised: device.name),

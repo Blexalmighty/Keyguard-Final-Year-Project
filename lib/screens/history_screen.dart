@@ -9,21 +9,19 @@ import '../widgets/map_modal.dart';
 import '../widgets/motion.dart';
 import '../widgets/section_label.dart';
 
-/// The activity log: connections, pings, and — the ones that matter — blocked
-/// pairing attempts.
+/// The security log: pairing attempts, claims, releases and commands refused.
 ///
-/// Security events get a coloured edge and a filter of their own, because a
-/// blocked intruder is the single most important thing this app can tell the
-/// user and it must not read as just another grey row.
-class HistoryScreen extends StatefulWidget {
+/// It used to be the whole activity log with a filter across the top — one chip
+/// for "Everything", one for "Security" — and the everyday rows drowned the
+/// ones that mattered. This screen now shows only the security events. The rest
+/// are still *recorded*, because the Home screen's last-known position is read
+/// out of connect and disconnect events; they are simply not listed here.
+///
+/// Security events keep their coloured edge. A blocked intruder is the single
+/// most important thing this app can tell the owner and it must not read as
+/// just another grey row.
+class HistoryScreen extends StatelessWidget {
   const HistoryScreen({super.key});
-
-  @override
-  State<HistoryScreen> createState() => _HistoryScreenState();
-}
-
-class _HistoryScreenState extends State<HistoryScreen> {
-  bool _securityOnly = false;
 
   @override
   Widget build(BuildContext context) {
@@ -42,9 +40,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
     final p = AppPalette.of(context);
 
-    final securityCount = all.where((e) => e.isSecurityEvent).length;
-    final events =
-        _securityOnly ? all.where((e) => e.isSecurityEvent).toList() : all;
+    final events = all.where((e) => e.isSecurityEvent).toList();
     final groups = _groupByDay(events);
 
     return Scaffold(
@@ -68,41 +64,25 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           child: Padding(
                             padding: const EdgeInsets.only(top: 4, bottom: 14),
                             child: Text(
-                              all.isEmpty
-                                  ? 'Connections, pings and blocked pairing '
-                                      'attempts appear here.'
-                                  : '${all.length} event'
-                                      '${all.length == 1 ? '' : 's'} logged on '
-                                      'this phone.',
+                              events.isEmpty
+                                  ? 'Pairing attempts and refused commands '
+                                      'appear here.'
+                                  : '${events.length} security event'
+                                      '${events.length == 1 ? '' : 's'} logged '
+                                      'on this phone.',
                               style: AppTypography.bodyMd(
                                   color: p.onSurfaceVariant),
                             ),
                           ),
                         ),
-
-                        if (all.isNotEmpty)
-                          FadeSlideIn(
-                            delay: AppMotion.stagger,
-                            child: _Filters(
-                              securityOnly: _securityOnly,
-                              securityCount: securityCount,
-                              totalCount: all.length,
-                              onChanged: (v) =>
-                                  setState(() => _securityOnly = v),
-                            ),
-                          ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 4),
 
                         AppSwap(
                           alignment: Alignment.topCenter,
                           child: groups.isEmpty
-                              ? _EmptyState(
-                                  key: ValueKey('empty$_securityOnly'),
-                                  securityOnly: _securityOnly,
-                                )
+                              ? const _EmptyState(key: ValueKey('empty'))
                               : Column(
-                                  key: ValueKey(
-                                      'list$_securityOnly${events.length}'),
+                                  key: ValueKey('list${events.length}'),
                                   crossAxisAlignment:
                                       CrossAxisAlignment.stretch,
                                   // Grouped by the events' own timestamps. The
@@ -210,112 +190,11 @@ class _AppBar extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 440),
           child: Row(
             children: [
-              const AppLogoTile(icon: Icons.history_rounded, size: 30),
+              const AppLogoTile(icon: Icons.shield_rounded, size: 30),
               const SizedBox(width: 10),
-              const AppWordmark('Activity'),
+              const AppWordmark('Security'),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Filters extends StatelessWidget {
-  const _Filters({
-    required this.securityOnly,
-    required this.securityCount,
-    required this.totalCount,
-    required this.onChanged,
-  });
-
-  final bool securityOnly;
-  final int securityCount;
-  final int totalCount;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: _Chip(
-            label: 'Everything',
-            count: totalCount,
-            selected: !securityOnly,
-            onTap: () => onChanged(false),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: _Chip(
-            label: 'Security',
-            count: securityCount,
-            selected: securityOnly,
-            danger: true,
-            onTap: () => onChanged(true),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _Chip extends StatelessWidget {
-  const _Chip({
-    required this.label,
-    required this.count,
-    required this.selected,
-    required this.onTap,
-    this.danger = false,
-  });
-
-  final String label;
-  final int count;
-  final bool selected;
-  final VoidCallback onTap;
-  final bool danger;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = AppPalette.of(context);
-    final accent = danger ? p.danger : p.primary;
-
-    return PressableScale(
-      onTap: onTap,
-      borderRadius: 12,
-      child: AnimatedContainer(
-        duration: AppMotion.normal,
-        curve: AppMotion.standard,
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        decoration: BoxDecoration(
-          color: selected
-              ? (danger ? p.dangerSoft : p.primarySoft)
-              : p.surface,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: selected ? accent.withValues(alpha: 0.45) : p.border,
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(label,
-                style: AppTypography.bodyMd(
-                    color: selected ? accent : p.onSurfaceVariant)),
-            const SizedBox(width: 6),
-            AnimatedContainer(
-              duration: AppMotion.normal,
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-              decoration: BoxDecoration(
-                color: (selected ? accent : p.muted).withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(7),
-              ),
-              child: Text('$count',
-                  style: AppTypography.microLabel(
-                      color: selected ? accent : p.muted)),
-            ),
-          ],
         ),
       ),
     );
@@ -348,9 +227,7 @@ class _DayHeader extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState({super.key, required this.securityOnly});
-
-  final bool securityOnly;
+  const _EmptyState({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -366,30 +243,26 @@ class _EmptyState extends StatelessWidget {
             width: 52,
             height: 52,
             decoration: BoxDecoration(
-              color: securityOnly ? p.successSoft : p.surfaceHigh,
+              color: p.successSoft,
               shape: BoxShape.circle,
             ),
             child: Icon(
-              securityOnly
-                  ? Icons.shield_rounded
-                  : Icons.history_toggle_off_rounded,
+              Icons.shield_rounded,
               size: 25,
-              color: securityOnly ? p.success : p.muted,
+              color: p.success,
             ),
           ),
           const SizedBox(height: 14),
           Text(
-            securityOnly ? 'Nothing to report' : 'No events yet',
+            // Framed as reassurance, because an empty security log is the good
+            // outcome — not a missing feature.
+            'Nothing to report',
             style: AppTypography.bodyLg(color: p.onSurface),
           ),
           const SizedBox(height: 6),
           Text(
-            securityOnly
-                // Framed as reassurance, because an empty security log is the
-                // good outcome — not a missing feature.
-                ? 'No one has tried to claim or command your keyholder. Blocked '
-                    'attempts would be listed here.'
-                : 'Pair with your keyholder to start logging activity.',
+            'No one has tried to claim or command your keyholder. Blocked '
+            'attempts would be listed here.',
             textAlign: TextAlign.center,
             style: AppTypography.bodyMd(color: p.muted),
           ),

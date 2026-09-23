@@ -135,11 +135,11 @@ class BackgroundService {
       androidNotificationOptions: AndroidNotificationOptions(
         // A channel of its own, distinct from the two in NotificationService.
         // Android shows this channel in system settings, and an owner who mutes
-        // "Find X is running" must not thereby mute "your keys are moving away".
+        // "FindX is running" must not thereby mute "your keys are moving away".
         channelId: 'findx_background',
         channelName: 'Background monitoring',
         channelDescription:
-            'Shown while Find X is watching your keyholder in the background.',
+            'Shown while FindX is watching your keyholder in the background.',
         // LOW: visible in the shade, never a sound or a heads-up banner. This
         // notification is a status line, not an alert — the alerts are the
         // other two channels' job.
@@ -328,7 +328,7 @@ class BackgroundService {
   /// running". When disconnected it says what the app is doing about it.
   static String _text({required bool connected, required String deviceName}) =>
       connected
-          ? '$deviceName is in range. Find X is watching for it moving away.'
-          : 'Find X is looking for $deviceName and will alert you when it '
+          ? '$deviceName is in range. FindX is watching for it moving away.'
+          : 'FindX is looking for $deviceName and will alert you when it '
               'reconnects.';
 }

@@ -142,7 +142,6 @@ class BleService extends ChangeNotifier {
   BluetoothDevice? _connectedDevice;
   BluetoothCharacteristic? _dataChar;
   BluetoothCharacteristic? _authChar;
-  BluetoothCharacteristic? _provChar;
 
   StreamSubscription<List<int>>? _dataSubscription;
   StreamSubscription<List<int>>? _authSubscription;
@@ -153,15 +152,6 @@ class BleService extends ChangeNotifier {
   /// ownership handshake without this class owning the crypto.
   final StreamController<String> _authFrames =
       StreamController<String>.broadcast();
-
-  /// Last Wi-Fi provisioning outcome, as reported by the keyholder.
-  ///
-  /// Null until a WIFI_OK/WIFI_FAIL frame has arrived this session. The Wi-Fi
-  /// setup screen sets a flag on the way in ([_awaitWifiResult]) and reads this
-  /// when the frame lands, so it can show "joined 192.168.1.4" or "wrong
-  /// password" without having to keep a subscription open itself.
-  String? _wifiSetupResult;
-  bool _awaitWifiResult = false;
 
   // ---------------------------------------------------------------------------
   // GPS state
@@ -271,6 +261,56 @@ class BleService extends ChangeNotifier {
   /// Publishes [fix] as the app's current position and rebuilds.
   void _adoptPhoneFix(PhoneFix fix) {
     if (_applyPhoneFix(fix)) notifyListeners();
+    // Every new position is also offered to the keyholder. See
+    // [pushPhoneLocation] for why the keyholder wants it.
+    unawaited(pushPhoneLocation());
+  }
+
+  /// Tells the keyholder where this phone is.
+  ///
+  /// The keyholder has a screen and — on this build — no GPS module, so left to
+  /// itself its location page has nothing to display and sits on "no fix"
+  /// permanently. That is the bug this method exists to fix: the board was
+  /// waiting for a frame nobody was sending.
+  ///
+  /// It matters because the two devices answer different questions. The app
+  /// answers "where are my keys". The keyholder's screen answers "where was my
+  /// phone last seen" — which is the one you need when the phone is the thing
+  /// that is missing, and the only one of the two you can read without the
+  /// phone in your hand.
+  ///
+  /// Sent on a best-effort basis and never awaited by callers:
+  ///
+  /// * Silent when there is no link, no fix, or the session is not one the
+  ///   firmware would accept a command from. A claimed keyholder refuses every
+  ///   data write before `AUTH_OK`, so pushing earlier would only earn an
+  ///   `ERR_NOT_AUTHED` and a spurious error on the owner's screen.
+  /// * Failures are swallowed. A position that did not arrive is not worth
+  ///   interrupting anybody over — the next fix, or the next connect, carries
+  ///   it.
+  Future<void> pushPhoneLocation() async {
+    if (!_isConnected || !_hasGpsFix) return;
+
+    // Unclaimed units accept data commands from anyone (that is how a keyholder
+    // is set up in the first place); claimed ones accept them only from an
+    // authenticated session.
+    final usable = _ownershipState == OwnershipState.authenticated ||
+        _ownershipState == OwnershipState.unclaimed;
+    if (!usable) return;
+
+    final frame = '${BleCommands.phoneLocPrefix}$_lastLat,$_lastLng';
+    final c = _dataChar;
+    if (c == null) return;
+    try {
+      await c.write(
+        utf8.encode(frame),
+        withoutResponse:
+            !c.properties.write && c.properties.writeWithoutResponse,
+      );
+    } catch (e) {
+      // Deliberately not routed through `_lastError`: see the doc comment.
+      debugPrint('FindMe: could not push phone location — $e');
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -388,7 +428,6 @@ class BleService extends ChangeNotifier {
   AlertPattern _alertPattern = AlertPattern.fallback;
 
   bool _saveGpsOnDisconnect = true;
-  bool _wifiCloudSyncEnabled = true;
   bool _darkModeEnabled = false;
   bool _demoModeEnabled = false;
 
@@ -406,13 +445,25 @@ class BleService extends ChangeNotifier {
   /// The name to put in front of the owner for [deviceId].
   ///
   /// Prefers the nickname they chose, because a claimed keyholder advertises the
-  /// deliberately generic "Find Me" — see SettingsStore.nicknameFor. Falls back
+  /// deliberately generic "FindMe" — see SettingsStore.nicknameFor. Falls back
   /// to whatever the radio broadcast, then to a last resort so no card is ever
   /// blank.
   String displayNameFor(String id, {String? advertised}) {
     final nick = _settings?.nicknameFor(id);
     if (nick != null && nick.isNotEmpty) return nick;
-    if (advertised != null && advertised.isNotEmpty) return advertised;
+    if (advertised != null && advertised.isNotEmpty) {
+      // A board flashed before the rename still broadcasts "KeyGuard" or
+      // "BLE-Keyholder". It is the same product, so it is shown under the
+      // current name rather than the one burned into whatever firmware happens
+      // to be on it — otherwise the app contradicts its own labelling on
+      // hardware the owner has no reason to reflash.
+      if (advertised == BleNames.legacyKeyguard ||
+          advertised == BleNames.legacySpaced ||
+          advertised == BleNames.legacyUnclaimed) {
+        return BleNames.keyholder;
+      }
+      return advertised;
+    }
     return 'Keyholder';
   }
 
@@ -531,18 +582,9 @@ class BleService extends ChangeNotifier {
   /// How many keyholders the current scan can see, for the Scan screen counter.
   int get keyholderCount => _scannedDevices.where((d) => d.isKeyholder).length;
 
-  /// Explains what the keyholder's Wi-Fi is for, on the Settings screen.
-  ///
-  /// It reads as a range feature to users — "Wi-Fi gives it better range" — and
-  /// that is half true, but not in the way people assume. It does not extend the
-  /// phone-to-keyholder radio link; it lets the keyholder report its position to
-  /// the cloud so the phone can read it from anywhere. Saying so plainly here is
-  /// cheaper than letting the user discover it when it matters.
-  String get wifiStatusMessage =>
-      'Giving your keyholder a Wi-Fi network lets it report its position to the '
-      'cloud on its own, so you can still see where it is when it is out of '
-      'Bluetooth range. The phone always talks to the keyholder over Bluetooth; '
-      'this only widens where its last position can reach you.';
+  // There was a `wifiStatusMessage` here, explaining to the owner what giving
+  // the keyholder a Wi-Fi network would do for them. The keyholder is a
+  // Bluetooth device now and nothing else, so there is nothing to explain.
 
   double get alertDistanceThreshold => _alertDistanceThreshold;
 
@@ -571,7 +613,6 @@ class BleService extends ChangeNotifier {
   bool get alertSoundEnabled => _alertSoundEnabled;
   AlertPattern get alertPattern => _alertPattern;
   bool get saveGpsOnDisconnect => _saveGpsOnDisconnect;
-  bool get wifiCloudSyncEnabled => _wifiCloudSyncEnabled;
   bool get darkModeEnabled => _darkModeEnabled;
   bool get demoModeEnabled => _demoModeEnabled;
 
@@ -586,7 +627,6 @@ class BleService extends ChangeNotifier {
   /// Auth-characteristic traffic, for the pairing service.
   Stream<String> get authFrames => _authFrames.stream;
   BluetoothCharacteristic? get authCharacteristic => _authChar;
-  BluetoothCharacteristic? get provisioningCharacteristic => _provChar;
   BluetoothDevice? get connectedDevice => _connectedDevice;
 
   // ===========================================================================
@@ -612,7 +652,6 @@ class BleService extends ChangeNotifier {
       _alertSoundEnabled = store.alertSoundEnabled;
       _alertPattern = store.alertPattern;
       _saveGpsOnDisconnect = store.saveGpsOnDisconnect;
-      _wifiCloudSyncEnabled = store.wifiCloudSyncEnabled;
       _darkModeEnabled = store.darkModeEnabled;
       _demoModeEnabled = store.demoModeEnabled;
       _proximity = store.proximityModel;
@@ -854,7 +893,7 @@ class BleService extends ChangeNotifier {
         _permissionStatusMessage = scan.isPermanentlyDenied ||
                 connect.isPermanentlyDenied
             ? 'Bluetooth permissions were permanently denied. Enable them in '
-                'Android Settings › Apps › Find X › Permissions.'
+                'Android Settings › Apps › FindX › Permissions.'
             : 'Nearby-devices permission is required to find your keyholder.';
         notifyListeners();
       }
@@ -1138,7 +1177,7 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  /// A narrow scan that only surfaces Find Me hardware, for the pairing flow.
+  /// A narrow scan that only surfaces FindMe hardware, for the pairing flow.
   ///
   /// The general scan above is intentionally unfiltered so the Scan tab can list
   /// everything in the room; only one BLE scan can run at a time, so the two
@@ -1383,7 +1422,7 @@ class BleService extends ChangeNotifier {
         return true;
       }
 
-      // Shows the system "Pair with Find Me? Enter PIN" dialog. The code it
+      // Shows the system "Pair with FindMe? Enter PIN" dialog. The code it
       // asks for is the one the firmware is rendering on the OLED.
       //
       // `createBond` waits for the outcome itself and throws if the bond does
@@ -1442,7 +1481,7 @@ class BleService extends ChangeNotifier {
     }
     if (target == null) {
       throw StateError(
-        'This device does not expose the Find Me service '
+        'This device does not expose the FindMe service '
         '(${BleUuids.service}). It is not a keyholder.',
       );
     }
@@ -1452,10 +1491,9 @@ class BleService extends ChangeNotifier {
     // something in Generic Attribute rather than the data channel.
     _dataChar = _findChar(target, BleUuids.dataChar);
     _authChar = _findChar(target, BleUuids.authChar);
-    _provChar = _findChar(target, BleUuids.provChar);
 
     if (_dataChar == null) {
-      throw StateError('Find Me service is missing its data characteristic.');
+      throw StateError('FindMe service is missing its data characteristic.');
     }
 
     _dataSubscription =
@@ -1593,7 +1631,6 @@ class BleService extends ChangeNotifier {
     _bondState = null;
     _dataChar = null;
     _authChar = null;
-    _provChar = null;
     _rssiTimer?.cancel();
     _rssiTimer = null;
   }
@@ -1781,7 +1818,7 @@ class BleService extends ChangeNotifier {
         if (!granted) {
           _backgroundRunningEnabled = false;
           _lastError =
-              'Find X needs permission to show a notification before it can '
+              'FindX needs permission to show a notification before it can '
               'keep watching in the background.';
           notifyListeners();
           return;
@@ -1793,7 +1830,7 @@ class BleService extends ChangeNotifier {
       );
       _backgroundRunningEnabled = started;
       if (!started) {
-        _lastError = 'This phone would not let Find X run in the background.';
+        _lastError = 'This phone would not let FindX run in the background.';
       }
     } else {
       await BackgroundService.stop();
@@ -1868,7 +1905,7 @@ class BleService extends ChangeNotifier {
   // ===========================================================================
 
   void _handleDataFrame(String data) {
-    debugPrint('Find Me → app: $data');
+    debugPrint('FindMe → app: $data');
 
     if (data == BleResponses.ready) {
       _lastError = '';
@@ -1933,10 +1970,13 @@ class BleService extends ChangeNotifier {
   /// Republished for `pairing_service.dart`; the handshake itself is not this
   /// class's job, but the connection state it produces is.
   void _handleAuthFrame(String data) {
-    debugPrint('Find Me auth → app: $data');
+    debugPrint('FindMe auth → app: $data');
 
     if (data == BleResponses.statusUnclaimed) {
       _ownershipState = OwnershipState.unclaimed;
+      // An unclaimed unit accepts data writes from anybody, so its screen can
+      // be given a position straight away.
+      unawaited(pushPhoneLocation());
     } else if (data.startsWith(BleResponses.authReqPrefix)) {
       _ownershipState = OwnershipState.authenticating;
     } else if (data == BleResponses.authOk) {
@@ -1946,6 +1986,10 @@ class BleService extends ChangeNotifier {
       // here rather than at connect time because on a claimed device every
       // command before AUTH_OK is refused outright.
       unawaited(pushAlertPattern());
+      // Same reason, and this is what stops the keyholder's location screen
+      // being a dead end: it has no GPS of its own, so the only position it
+      // will ever have is the one this phone hands it.
+      unawaited(pushPhoneLocation());
     } else if (data == BleResponses.authFail) {
       _ownershipState = OwnershipState.authFailed;
       _lastError = 'The keyholder refused this phone.';
@@ -1953,24 +1997,12 @@ class BleService extends ChangeNotifier {
       _ownershipState = OwnershipState.lockedOut;
       final secs = data.substring(BleResponses.lockedPrefix.length).trim();
       _lastError = 'Too many failed attempts. Locked for $secs s.';
-    } else if (data.startsWith(BleResponses.wifiOkPrefix)) {
-      // WIFI_OK:<ip>. The IP is what the owner actually needs — it is the only
-      // thing that confirms the device reached the network rather than merely
-      // accepting the credentials.
-      if (_awaitWifiResult) {
-        _wifiSetupResult =
-            'Joined ${data.substring(BleResponses.wifiOkPrefix.length).trim()}';
-      }
-      // A successful provisioning is a security-relevant decision (who may give
-      // the device a network is who may steer where it reports), so it leaves a
-      // trail in History.
-      logSecurityEvent(EventType.wifiProvisioned);
-    } else if (data.startsWith(BleResponses.wifiFailPrefix)) {
-      if (_awaitWifiResult) {
-        final reason = data.substring(BleResponses.wifiFailPrefix.length);
-        _wifiSetupResult = _describeWifiFailure(reason);
-      }
     }
+
+    // `WIFI_OK:` / `WIFI_FAIL:` used to be handled here. Firmware that predates
+    // the Wi-Fi removal still sends them when provisioned by an older phone;
+    // they now fall through to the republish below and are ignored, which is
+    // what an unrecognised frame should do.
 
     if (!_authFrames.isClosed) _authFrames.add(data);
     notifyListeners();
@@ -2331,6 +2363,9 @@ class BleService extends ChangeNotifier {
     if (fix == null) return;
 
     final moved = _applyPhoneFix(fix);
+    // The refined fix is better than whatever the keyholder was given on
+    // connect, so the screen on the device is corrected too.
+    if (moved) unawaited(pushPhoneLocation());
 
     final index = _historyEvents.indexWhere((e) => e.id == eventId);
     if (index < 0) {
@@ -2461,86 +2496,6 @@ class BleService extends ChangeNotifier {
     await _settings?.setSaveGpsOnDisconnect(value);
   }
 
-  Future<void> setWifiCloudSyncEnabled(bool value) async {
-    _wifiCloudSyncEnabled = value;
-    notifyListeners();
-    await _settings?.setWifiCloudSyncEnabled(value);
-  }
-
-  /// Send Wi-Fi credentials to the connected keyholder.
-  ///
-  /// Builds `WIFI_SET:<ssid b64>:<password b64>` and writes it to the *prov*
-  /// characteristic, not the data channel — the firmware refuses WIFI_SET on the
-  /// data characteristic and only accepts it from an authenticated session, so
-  /// this also fails cleanly when the ownership handshake has not happened.
-  /// Both fields are base64-encoded, per the firmware parser, so that a colon or
-  /// non-ASCII character in either cannot split the frame wrong.
-  ///
-  /// Returns true only once the write completed; the device's own
-  /// `WIFI_OK:<ip>`/`WIFI_FAIL:<reason>` arrives later on the auth stream, which
-  /// the Wi-Fi setup screen reads back through [wifiSetupResult].
-  Future<bool> setupWifi({required String ssid, required String password}) async {
-    if (ssid.trim().isEmpty) return false;
-    final frame = '${BleCommands.wifiSetPrefix}'
-        '${base64Encode(utf8.encode(ssid))}:'
-        '${base64Encode(utf8.encode(password))}';
-    return _writeProv(frame);
-  }
-
-  /// Writes to the provisioning characteristic, with the same error path as
-  /// [_write] but against a different channel. Kept separate so a prov write can
-  /// never accidentally go to the data characteristic (or vice versa).
-  Future<bool> _writeProv(String frame) async {
-    final c = _provChar;
-    if (c == null || !_isConnected) {
-      _lastError = 'Not connected to a keyholder.';
-      notifyListeners();
-      return false;
-    }
-    try {
-      await c.write(
-        utf8.encode(frame),
-        withoutResponse: !c.properties.write && c.properties.writeWithoutResponse,
-      );
-      return true;
-    } catch (e) {
-      _lastError = 'Could not send Wi-Fi credentials: $e';
-      notifyListeners();
-      return false;
-    }
-  }
-
-  /// The outcome of the most recent Wi-Fi provisioning attempt, once the
-  /// keyholder has had a chance to answer. Null while nothing has been attempted
-  /// or while the device is still connecting.
-  String? get wifiSetupResult => _wifiSetupResult;
-
-  /// Called by the Wi-Fi setup screen before it writes credentials, so the
-  /// handler in [_handleAuthFrame] knows to record the reply for reading back.
-  void armWifiResultCapture() {
-    _awaitWifiResult = true;
-    _wifiSetupResult = null;
-  }
-
-  /// Maps the firmware's terse failure reasons to something an owner reads
-  /// naturally. The firmware sends bare tokens; the phone is the one with a
-  /// screen.
-  String _describeWifiFailure(String reason) {
-    switch (reason.trim()) {
-      case 'NO_CONNECT':
-        return 'The keyholder could not reach that network. Check the name, '
-            'confirm the password, and try again.';
-      case 'BAD_FORMAT':
-        return 'The network details were not recognised. Try again.';
-      case 'BAD_SSID':
-        return 'The network name was empty. Enter it and try again.';
-      default:
-        return reason.trim().isEmpty
-            ? 'The keyholder did not join the network.'
-            : 'The keyholder did not join the network ($reason).';
-    }
-  }
-
   Future<void> setDarkModeEnabled(bool value) async {
     _darkModeEnabled = value;
     notifyListeners();
@@ -2610,7 +2565,7 @@ class BleService extends ChangeNotifier {
     final rand = Random(7); // Fixed seed: reproducible for screenshots.
     _discovered['DEMO-KEYHOLDER'] = BleDevice(
       id: 'DEMO-KEYHOLDER',
-      name: 'Find Me (demo)',
+      name: 'FindMe (demo)',
       rssi: -48,
       macAddress: 'DE:M0:00:01',
       deviceType: BleDeviceType.keyholder,

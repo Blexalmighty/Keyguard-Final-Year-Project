@@ -17,7 +17,6 @@ enum EventType {
   ownershipClaimed,
   ownershipReleased,
   intruderBlocked,
-  wifiProvisioned,
 
   /// The keyholder passed the owner's maximum allowance while still connected.
   ///
@@ -113,8 +112,6 @@ class EventModel {
         return 'ownership_released';
       case EventType.intruderBlocked:
         return 'intruder_blocked';
-      case EventType.wifiProvisioned:
-        return 'wifi_provisioned';
       case EventType.maxAllowanceExceeded:
         return 'max_allowance_exceeded';
     }
@@ -134,8 +131,10 @@ class EventModel {
         return EventType.ownershipReleased;
       case 'intruder_blocked':
         return EventType.intruderBlocked;
-      case 'wifi_provisioned':
-        return EventType.wifiProvisioned;
+      // 'wifi_provisioned' rows may still sit in an older phone's stored log.
+      // They fall through to the default below rather than being listed: the
+      // keyholder is a Bluetooth device now and there is no such event to
+      // record any more.
       case 'max_allowance_exceeded':
         return EventType.maxAllowanceExceeded;
       case 'connected':
@@ -160,8 +159,6 @@ class EventModel {
         return 'Ownership released';
       case EventType.intruderBlocked:
         return 'Unauthorised pairing blocked';
-      case EventType.wifiProvisioned:
-        return 'Wi-Fi credentials sent';
       case EventType.maxAllowanceExceeded:
         return 'Went past your limit';
     }
@@ -188,7 +185,6 @@ class EventModel {
         return p.warning;
       case EventType.phonePingedKey:
       case EventType.keyPingedPhone:
-      case EventType.wifiProvisioned:
         return p.primary;
     }
   }
@@ -207,7 +203,6 @@ class EventModel {
         return p.warningSoft;
       case EventType.phonePingedKey:
       case EventType.keyPingedPhone:
-      case EventType.wifiProvisioned:
         return p.primarySoft;
     }
   }
@@ -228,8 +223,6 @@ class EventModel {
         return Icons.lock_open_rounded;
       case EventType.intruderBlocked:
         return Icons.gpp_bad_rounded;
-      case EventType.wifiProvisioned:
-        return Icons.wifi_password_rounded;
       case EventType.maxAllowanceExceeded:
         return Icons.social_distance_rounded;
     }
@@ -247,7 +240,6 @@ class EventModel {
       type == EventType.ownershipClaimed ||
       type == EventType.ownershipReleased ||
       type == EventType.intruderBlocked ||
-      type == EventType.wifiProvisioned ||
       type == EventType.phonePingedKey ||
       type == EventType.keyPingedPhone ||
       type == EventType.disconnected ||
@@ -268,7 +260,6 @@ class EventModel {
         return 'from $name';
       case EventType.connected:
       case EventType.ownershipClaimed:
-      case EventType.wifiProvisioned:
         return 'to $name';
       case EventType.phonePingedKey:
       case EventType.keyPingedPhone:
