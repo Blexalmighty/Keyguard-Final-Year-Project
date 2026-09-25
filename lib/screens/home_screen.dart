@@ -504,6 +504,11 @@ class _LocationCard extends StatelessWidget {
                       child: MapPreviewWidget(
                         locationName: bleService.locationName,
                         coordinates: bleService.coordinatesFormatted,
+                        // Parsed here rather than inside the widget so the map
+                        // is simply absent for a malformed pair instead of the
+                        // widget having to decide what a bad fix looks like.
+                        latitude: double.tryParse(bleService.lastLat),
+                        longitude: double.tryParse(bleService.lastLng),
                         height: 150,
                       ),
                     )

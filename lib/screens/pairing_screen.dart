@@ -8,7 +8,6 @@ import '../theme/app_theme.dart';
 import '../widgets/motion.dart';
 import '../widgets/ownership_badge.dart';
 import '../widgets/passkey_entry_sheet.dart';
-import '../widgets/section_label.dart';
 
 /// The claim flow: an unowned keyholder becomes *yours*, and nobody else's.
 ///
@@ -57,7 +56,6 @@ class PairingScreen extends StatelessWidget {
                     bleService: bleService,
                     pairing: pairing,
                   ),
-                  const _Explainer(),
                 ], step: AppMotion.stagger)
                     .expand((w) => [w, const SizedBox(height: 20)]),
               ],
@@ -79,19 +77,6 @@ class PairingScreen extends StatelessWidget {
   /// version hardcoded `0xFF00562A` for success — a dark green that turned into
   /// near-black text on a glowing chip once dark mode existed.
   _Step _describe(BleService bleService, PairingService pairing, AppPalette p) {
-    if (device.isDemo) {
-      return _Step(
-        title: 'Simulated device',
-        detail: 'This entry comes from Demo Mode. It has no radio behind it, so '
-            'it cannot be claimed or authenticated — that restriction is '
-            'deliberate, so a simulated device can never stand in for a real '
-            'one.',
-        icon: Icons.science_outlined,
-        fg: p.warning,
-        bg: p.warningSoft,
-      );
-    }
-
     if (!bleService.isConnected) {
       if (bleService.isConnecting) {
         return _Step(
@@ -204,13 +189,10 @@ class PairingScreen extends StatelessWidget {
       case PairingStage.idle:
         return _Step(
           title: 'Connected',
-          detail: 'Checking whether this keyholder already has an owner. If it '
-              'is an older build without the ownership handshake, it simply '
-              'shows as connected with no owner.',
+          detail: 'Ready.',
           icon: Icons.link_rounded,
           fg: p.primary,
           bg: p.primarySoft,
-          busy: true,
         );
     }
   }
@@ -356,12 +338,6 @@ class _Actions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // A simulated device gets no buttons at all. Demo Mode must never be able to
-    // reach the claim path.
-    if (device.isDemo) {
-      return const SizedBox.shrink();
-    }
-
     if (!bleService.isConnected) {
       return FilledButton(
         onPressed: bleService.isConnecting
@@ -470,90 +446,6 @@ class _Actions extends StatelessWidget {
   }
 }
 
-// =============================================================================
-// Explainer
-// =============================================================================
-
-/// Explains the lock, once, where the user is deciding whether to trust it.
-class _Explainer extends StatelessWidget {
-  const _Explainer();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SectionLabel('HOW THE LOCK WORKS'),
-        const SizedBox(height: 10),
-        const _Bullet(
-          icon: Icons.touch_app_rounded,
-          title: 'Only someone holding the device can claim it',
-          detail: 'The firmware accepts a claim only while the physical button '
-              'is held down.',
-        ),
-        const _Bullet(
-          icon: Icons.visibility_off_rounded,
-          title: 'While you are connected, it is invisible',
-          detail: 'The keyholder stops advertising the moment you connect, so a '
-              'second phone cannot see it, let alone pair with it.',
-        ),
-        const _Bullet(
-          icon: Icons.fingerprint_rounded,
-          title: 'After you disconnect, it still knows you',
-          detail: 'It advertises again but stays claimed. Every connection must '
-              'answer a fresh cryptographic challenge; a phone without your key '
-              'is disconnected and shown on the keyholder\'s screen as blocked.',
-        ),
-        const _Bullet(
-          icon: Icons.lock_open_rounded,
-          title: 'You can always release it',
-          detail: 'Release ownership from Settings, or hold the device\'s button '
-              'for ten seconds. Nothing here can lock you out of your own '
-              'keyholder.',
-        ),
-      ],
-    );
-  }
-}
-
-class _Bullet extends StatelessWidget {
-  const _Bullet({
-    required this.icon,
-    required this.title,
-    required this.detail,
-  });
-
-  final IconData icon;
-  final String title;
-  final String detail;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = AppPalette.of(context);
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 16, color: p.primary),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: AppTypography.bodyLg(color: p.onSurface)),
-                const SizedBox(height: 2),
-                Text(detail,
-                    style: AppTypography.bodyMd(color: p.onSurfaceVariant)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// One rendering of the pairing state: what the user is told, and how it looks.
 class _Step {

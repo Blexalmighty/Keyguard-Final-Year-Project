@@ -29,7 +29,6 @@ class SettingsStore {
   static const String _kPhoneVibrate = 'phone_alert_vibrate';
   static const String _kSaveGpsOnDisconnect = 'save_gps_on_disconnect';
   static const String _kDarkMode = 'dark_mode_enabled';
-  static const String _kDemoMode = 'demo_mode_enabled';
   static const String _kAlertDistance = 'alert_distance_threshold';
   static const String _kMaxAllowance = 'max_allowance_distance';
   static const String _kTxPower = 'rssi_tx_power';
@@ -42,6 +41,7 @@ class SettingsStore {
   static const String _kBackgroundAsked = 'background_permission_asked';
   static const String _kLastDeviceId = 'last_device_id';
   static const String _kLastDeviceName = 'last_device_name';
+  static const String _kUserDisconnected = 'user_disconnected';
 
   static Future<SettingsStore> open() async =>
       SettingsStore._(await SharedPreferences.getInstance());
@@ -133,12 +133,6 @@ class SettingsStore {
   bool get darkModeEnabled => _prefs.getBool(_kDarkMode) ?? false;
   Future<void> setDarkModeEnabled(bool v) => _prefs.setBool(_kDarkMode, v);
 
-  /// Demo mode is **off** unless explicitly switched on, and never defaults to
-  /// true — the real hardware path must be the default so the app can never
-  /// quietly present simulated state as if it were live.
-  bool get demoModeEnabled => _prefs.getBool(_kDemoMode) ?? false;
-  Future<void> setDemoModeEnabled(bool v) => _prefs.setBool(_kDemoMode, v);
-
   double get alertDistanceThreshold =>
       _prefs.getDouble(_kAlertDistance) ?? 2.0;
   Future<void> setAlertDistanceThreshold(double v) =>
@@ -197,6 +191,17 @@ class SettingsStore {
     await _prefs.remove(_kLastDeviceId);
     await _prefs.remove(_kLastDeviceName);
   }
+
+  /// Whether the owner switched the link off themselves.
+  ///
+  /// Remembered across launches on purpose. Reconnecting on next launch to a
+  /// keyholder the owner had deliberately disconnected would be the app
+  /// overriding a decision, not recovering from an accident — and it is
+  /// indistinguishable, from the owner's side, from the Disconnect button not
+  /// working. Cleared by any explicit connect or scan. See `BleService`.
+  bool get userDisconnected => _prefs.getBool(_kUserDisconnected) ?? false;
+  Future<void> setUserDisconnected(bool v) =>
+      _prefs.setBool(_kUserDisconnected, v);
 
   // --- Device nicknames ---
   //

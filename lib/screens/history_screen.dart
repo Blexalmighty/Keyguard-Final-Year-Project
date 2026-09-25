@@ -9,17 +9,17 @@ import '../widgets/map_modal.dart';
 import '../widgets/motion.dart';
 import '../widgets/section_label.dart';
 
-/// The security log: pairing attempts, claims, releases and commands refused.
+/// Security: one unfiltered history of everything the keyholder has done.
 ///
-/// It used to be the whole activity log with a filter across the top — one chip
-/// for "Everything", one for "Security" — and the everyday rows drowned the
-/// ones that mattered. This screen now shows only the security events. The rest
-/// are still *recorded*, because the Home screen's last-known position is read
-/// out of connect and disconnect events; they are simply not listed here.
+/// There is no filter across the top. Two chips — "Everything" and "Security" —
+/// meant the screen had a mode, and a log with a mode is a log that can be read
+/// wrong: an owner glancing at it while the wrong chip is selected concludes
+/// nothing happened. One list, newest first, grouped by day.
 ///
-/// Security events keep their coloured edge. A blocked intruder is the single
-/// most important thing this app can tell the owner and it must not read as
-/// just another grey row.
+/// Security events keep their coloured edge, which is what the filter was
+/// really for. A blocked intruder is the single most important thing this app
+/// can tell the owner, and it stands out by colour rather than by the owner
+/// having to go looking for it under a chip.
 class HistoryScreen extends StatelessWidget {
   const HistoryScreen({super.key});
 
@@ -40,7 +40,7 @@ class HistoryScreen extends StatelessWidget {
     );
     final p = AppPalette.of(context);
 
-    final events = all.where((e) => e.isSecurityEvent).toList();
+    final events = all;
     final groups = _groupByDay(events);
 
     return Scaffold(
@@ -65,9 +65,9 @@ class HistoryScreen extends StatelessWidget {
                             padding: const EdgeInsets.only(top: 4, bottom: 14),
                             child: Text(
                               events.isEmpty
-                                  ? 'Pairing attempts and refused commands '
+                                  ? 'Connections, pings and refused commands '
                                       'appear here.'
-                                  : '${events.length} security event'
+                                  : '${events.length} event'
                                       '${events.length == 1 ? '' : 's'} logged '
                                       'on this phone.',
                               style: AppTypography.bodyMd(
@@ -75,7 +75,8 @@ class HistoryScreen extends StatelessWidget {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 4),
+                        const SectionLabel('HISTORY'),
+                        const SizedBox(height: 10),
 
                         AppSwap(
                           alignment: Alignment.topCenter,
@@ -256,13 +257,13 @@ class _EmptyState extends StatelessWidget {
           Text(
             // Framed as reassurance, because an empty security log is the good
             // outcome — not a missing feature.
-            'Nothing to report',
+            'Nothing logged yet',
             style: AppTypography.bodyLg(color: p.onSurface),
           ),
           const SizedBox(height: 6),
           Text(
-            'No one has tried to claim or command your keyholder. Blocked '
-            'attempts would be listed here.',
+            'Connect to your keyholder and everything it does — pings, '
+            'disconnects, blocked attempts — is listed here.',
             textAlign: TextAlign.center,
             style: AppTypography.bodyMd(color: p.muted),
           ),

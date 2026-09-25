@@ -134,12 +134,16 @@ class MapModalSheet extends StatelessWidget {
                     child: MapPreviewWidget(
                       locationName: locationTitle,
                       coordinates: coordinates,
+                      latitude: latitude,
+                      longitude: longitude,
                       height: 200,
                     ),
                   )
                 : MapPreviewWidget(
                     locationName: locationTitle,
                     coordinates: coordinates,
+                    latitude: latitude,
+                    longitude: longitude,
                     height: 200,
                   ),
           ),

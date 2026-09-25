@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
-import 'dart:math';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -17,6 +16,7 @@ import '../utils/coordinate_format.dart';
 import 'background_service.dart';
 import 'ble_protocol.dart';
 import 'ble_vendors.dart';
+import 'geocoding_service.dart';
 import 'network_info_service.dart';
 import 'notification_service.dart';
 import 'phone_location_service.dart';
@@ -32,8 +32,8 @@ import 'settings_store.dart';
 /// the connection flag started at `true`, a phantom `KG-9921` card was injected
 /// into every scan result, and RSSI came from `Random()` — so the app looked
 /// like it was working whether or not any hardware existed. Anything simulated
-/// now lives behind [demoModeEnabled], which is off by default and cannot touch
-/// a real device.
+/// nothing on screen is simulated at all: the demo scaffolding that produced
+/// those values has been removed outright.
 class BleService extends ChangeNotifier {
   BleService() {
     _init();
@@ -102,9 +102,15 @@ class BleService extends ChangeNotifier {
   static const Duration _rescanGap = Duration(seconds: 4);
   static const Duration _connectTimeout = Duration(seconds: 20);
 
-  /// The keyholder's own buzzer times out; if a STOP is missed, the app should
-  /// not sit there claiming an alert is still sounding.
-  static const Duration _alertAutoClear = Duration(seconds: 45);
+  /// Backstop for an alert whose STOP never lands.
+  ///
+  /// Ten minutes, not the keyholder's old 45 seconds. The device now sounds
+  /// until it is told to stop, so this is no longer mirroring a firmware
+  /// timeout — it is only here so a missed notification cannot leave the app
+  /// claiming forever that something is ringing when it is not. Any figure
+  /// short enough to be reached during a real search would take the Stop button
+  /// away mid-hunt, which is the bug this used to cause.
+  static const Duration _alertAutoClear = Duration(minutes: 10);
 
   // ---------------------------------------------------------------------------
   // Device / connection state
@@ -165,6 +171,72 @@ class BleService extends ChangeNotifier {
   /// overwritten with the literal `"Mission District, CA"` on every `LOC:`
   /// frame, which meant the app confidently mislabelled every position.
   String _locationName = '';
+
+  /// Turns the coordinates above into a place name.
+  ///
+  /// Owned rather than injected: it holds nothing but a cache and a timestamp,
+  /// touches no platform channel, and does nothing at all until a real fix
+  /// arrives with the network up — so a test that never produces one never
+  /// reaches it.
+  final GeocodingService _geocoder = GeocodingService();
+
+  /// Fills [_locationName] for whatever is currently in [_lastLat]/[_lastLng].
+  ///
+  /// Fire-and-forget by design. The card is already showing coordinates by the
+  /// time this starts, so the name arriving a second later is an improvement
+  /// landing, not a load completing — there is no spinner and nothing waits.
+  ///
+  /// The coordinates are re-checked after the await: a keyholder that moved
+  /// while the lookup was in flight must not be labelled with where it was.
+  Future<void> _resolveLocationName() async {
+    if (!_hasInternet) return;
+    if (!isPlausibleFix(_lastLat, _lastLng)) return;
+
+    final lat = double.tryParse(_lastLat);
+    final lng = double.tryParse(_lastLng);
+    if (lat == null || lng == null) return;
+
+    // Somewhere already visited — no round trip, no frame showing coordinates
+    // before the name appears.
+    final cached = _geocoder.cachedFor(lat, lng);
+    if (cached != null) {
+      if (_locationName != cached) {
+        _locationName = cached;
+        notifyListeners();
+      }
+      return;
+    }
+
+    final askedLat = _lastLat;
+    final askedLng = _lastLng;
+    final name = await _geocoder.describe(lat, lng);
+    if (name == null || name.isEmpty) return;
+    if (_lastLat != askedLat || _lastLng != askedLng) return;
+
+    _locationName = name;
+    _backfillLocationName(askedLat, askedLng, name);
+    notifyListeners();
+  }
+
+  /// Names history rows that were written before the lookup came back.
+  ///
+  /// The row an owner actually opens is the disconnect — the moment the keys
+  /// were left behind — and that row is logged the instant the link drops,
+  /// which is a second or so before the place name arrives. Without this it
+  /// would be stamped with coordinates forever, while the Home card sitting
+  /// above it named the very same spot. Only rows at these exact coordinates
+  /// with no name are touched, so nothing already resolved is overwritten.
+  void _backfillLocationName(String lat, String lng, String name) {
+    var changed = false;
+    for (var i = 0; i < _historyEvents.length; i++) {
+      final e = _historyEvents[i];
+      if (e.locationName != null) continue;
+      if (e.latitude != lat || e.longitude != lng) continue;
+      _historyEvents[i] = e.copyWith(locationName: name);
+      changed = true;
+    }
+    if (changed) unawaited(_persistHistory());
+  }
 
   /// The phone's own receiver, which has replaced the keyholder's GPS module as
   /// the source of positions.
@@ -260,7 +332,12 @@ class BleService extends ChangeNotifier {
 
   /// Publishes [fix] as the app's current position and rebuilds.
   void _adoptPhoneFix(PhoneFix fix) {
-    if (_applyPhoneFix(fix)) notifyListeners();
+    if (_applyPhoneFix(fix)) {
+      notifyListeners();
+      // New coordinates, so the old name has just been cleared. Ask what this
+      // place is called.
+      unawaited(_resolveLocationName());
+    }
     // Every new position is also offered to the keyholder. See
     // [pushPhoneLocation] for why the keyholder wants it.
     unawaited(pushPhoneLocation());
@@ -349,6 +426,24 @@ class BleService extends ChangeNotifier {
   /// callback with no such guard.
   bool _autoConnectDone = false;
 
+  /// True when the owner pressed Disconnect themselves.
+  ///
+  /// This is the difference between "the link dropped" and "I switched it off",
+  /// and everything automatic has to respect it: the hunt is not re-armed, and
+  /// auto-connect ignores the keyholder even when it is sitting in the scan
+  /// results at -40 dBm. Without it the app reconnected within seconds and the
+  /// button looked broken — the connection-state listener fires on a deliberate
+  /// disconnect too, and its default is to resume hunting.
+  ///
+  /// Persisted, so it survives a relaunch. A phone that reconnected on next
+  /// launch to something the owner had deliberately switched off would be
+  /// overriding a decision rather than recovering from an accident.
+  ///
+  /// Cleared only by an explicit connect. Every *involuntary* drop — out of
+  /// range, a wall, a flat battery — leaves it false, which is what makes the
+  /// automatic reconnect still work when it should.
+  bool _userDisconnected = false;
+
   /// Consecutive failed auto-connect attempts.
   ///
   /// A failed connect re-arms the hunt (see [connectToDevice]), which is right
@@ -429,9 +524,6 @@ class BleService extends ChangeNotifier {
 
   bool _saveGpsOnDisconnect = true;
   bool _darkModeEnabled = false;
-  bool _demoModeEnabled = false;
-
-  Timer? _demoTimer;
 
   // ===========================================================================
   // Getters
@@ -614,7 +706,6 @@ class BleService extends ChangeNotifier {
   AlertPattern get alertPattern => _alertPattern;
   bool get saveGpsOnDisconnect => _saveGpsOnDisconnect;
   bool get darkModeEnabled => _darkModeEnabled;
-  bool get demoModeEnabled => _demoModeEnabled;
 
   ProximityModel get proximityModel => _proximity;
 
@@ -653,7 +744,6 @@ class BleService extends ChangeNotifier {
       _alertPattern = store.alertPattern;
       _saveGpsOnDisconnect = store.saveGpsOnDisconnect;
       _darkModeEnabled = store.darkModeEnabled;
-      _demoModeEnabled = store.demoModeEnabled;
       _proximity = store.proximityModel;
 
       _knownDeviceId = store.lastDeviceId;
@@ -662,14 +752,13 @@ class BleService extends ChangeNotifier {
       if (_knownDeviceId != null) _deviceId = _knownDeviceId!;
       _proximityWarningEnabled = store.proximityWarningEnabled;
       _backgroundRunningEnabled = store.backgroundRunningEnabled;
+      _userDisconnected = store.userDisconnected;
 
       // Read before the history it governs, so the restore below can drop
       // anything already past its date rather than briefly showing it.
       _historyRetention = store.historyRetention;
 
       _restoreHistory(store.historyJson);
-
-      if (_demoModeEnabled) _startDemoMode();
 
       // After the stored preference is known, and not awaited: starting a
       // foreground service crosses a platform channel, and first paint should
@@ -818,6 +907,14 @@ class BleService extends ChangeNotifier {
 
   void _listenConnectivity() {
     try {
+      // Ask once, up front. `onConnectivityChanged` only reports *changes*, so
+      // an app launched on a phone that is already on Wi-Fi and stays there can
+      // wait indefinitely for its first event — which used to leave
+      // `hasInternet` false, the address unread, and now would leave every
+      // position stuck on coordinates because the place-name lookup is gated on
+      // it.
+      unawaited(_seedConnectivity());
+
       _connectivitySubscription =
           Connectivity().onConnectivityChanged.listen((results) {
         // Scoped to what connectivity_plus can actually answer: does *this
@@ -833,10 +930,35 @@ class BleService extends ChangeNotifier {
         // connectivity change is exactly when it needs re-reading. Also the only
         // chance to read it at all if the app started with no route: the lookup
         // on attach would have failed and there is nothing else to retry it.
-        if (_hasInternet) unawaited(refreshNetworkAddress());
+        if (_hasInternet) {
+          unawaited(refreshNetworkAddress());
+          // A fix taken while offline is still sitting there unnamed. Now there
+          // is a route, it can be asked about.
+          if (_locationName.isEmpty) unawaited(_resolveLocationName());
+        }
       });
     } catch (e) {
       debugPrint('BleService: connectivity listener error: $e');
+    }
+  }
+
+  /// Reads the current connectivity once, for the reason given above.
+  Future<void> _seedConnectivity() async {
+    try {
+      final results = await Connectivity().checkConnectivity();
+      final online = results.any((r) =>
+          r == ConnectivityResult.wifi ||
+          r == ConnectivityResult.mobile ||
+          r == ConnectivityResult.ethernet);
+      if (online == _hasInternet) return;
+      _hasInternet = online;
+      notifyListeners();
+      if (online) {
+        unawaited(refreshNetworkAddress());
+        if (_locationName.isEmpty) unawaited(_resolveLocationName());
+      }
+    } catch (e) {
+      debugPrint('BleService: connectivity probe failed: $e');
     }
   }
 
@@ -974,9 +1096,11 @@ class BleService extends ChangeNotifier {
 
       // Auto-connect only to the keyholder this phone already knows. Grabbing
       // whichever unit advertises first would be wrong on a campus where more
-      // than one of these exists.
+      // than one of these exists — and never after the owner pressed
+      // Disconnect: that is a decision, not a fault to recover from.
       if (isKeyholder &&
           id == _knownDeviceId &&
+          !_userDisconnected &&
           !_autoConnectDone &&
           !_isConnected &&
           !_isConnecting) {
@@ -1221,6 +1345,10 @@ class BleService extends ChangeNotifier {
     // "try again" after the run of failures that stopped the hunt.
     _autoConnectFailures = 0;
     _autoConnectDone = false;
+    // Pressing Scan is also how the owner takes back a Disconnect: they are
+    // asking the app to go and find the keyholder, which is the opposite of
+    // "leave it alone".
+    _clearUserDisconnect();
     // Started *before* `beginContinuousScan`, which also starts one. If the
     // hunt loop got there first this call would hit the "already scanning"
     // guard and return without clearing [lastError] — leaving the owner tapping
@@ -1237,6 +1365,10 @@ class BleService extends ChangeNotifier {
   Future<void> connectToDevice(BluetoothDevice device) async {
     if (_isConnecting) return;
     if (_connectedDevice?.remoteId == device.remoteId && _isConnected) return;
+    // Anything that reaches here is either the owner connecting by hand or the
+    // automatic reconnect — and the automatic one cannot reach here while the
+    // flag is set, because [_onScanResults] refuses to nominate a target.
+    _clearUserDisconnect();
 
     _isConnecting = true;
     _lastError = '';
@@ -1613,7 +1745,7 @@ class BleService extends ChangeNotifier {
     // always means the owner has walked out of range of their keys, so this is
     // the single most important moment to be looking — and _autoConnectDone is
     // cleared so the reconnect can actually fire when the keyholder reappears.
-    if (wasConnected && !kIsWeb && resumeHunting) {
+    if (wasConnected && !kIsWeb && resumeHunting && !_userDisconnected) {
       _autoConnectDone = false;
       beginContinuousScan();
     }
@@ -1734,11 +1866,21 @@ class BleService extends ChangeNotifier {
   /// The outermost boundary: the keyholder is further away than the owner said
   /// it should ever be.
   ///
-  /// Does one thing the inner boundaries do not — it records the crossing in
-  /// History, with the phone's position. This is the moment that answers "where
-  /// was it when I lost it", and unlike a disconnect it happens while the link
-  /// is still up, so the distance on that row is measured rather than inferred
-  /// from the last reading before the link died.
+  /// This is the boundary that **sounds the buzzer**, and the only one that
+  /// does. The two inside it are notifications — a nudge on the phone in the
+  /// owner's hand, which is the right weight for "your keys are drifting". The
+  /// maximum allowance is different in kind: it is the distance the owner said
+  /// their keys should never be past, so crossing it has to be audible from
+  /// wherever the keys now are, not just on a screen the owner may not be
+  /// looking at. Making the buzzer the last resort is also what keeps it
+  /// meaningful — a keyholder that chirps at every boundary is a keyholder
+  /// whose owner stops hearing it.
+  ///
+  /// It also does one thing the inner boundaries do not — it records the
+  /// crossing in History, with the phone's position. This is the moment that
+  /// answers "where was it when I lost it", and unlike a disconnect it happens
+  /// while the link is still up, so the distance on that row is measured rather
+  /// than inferred from the last reading before the link died.
   void _evaluateMaxAllowance(double d) {
     if (!maxAllowanceActive) return;
     final limit = maxAllowanceDistance;
@@ -1768,6 +1910,21 @@ class BleService extends ChangeNotifier {
     // which is the whole point of recording it here rather than waiting for the
     // disconnect that may follow minutes later and streets away.
     _logEvent(EventType.maxAllowanceExceeded);
+
+    // And the noise. Not `pingKey()`: that refuses when the owner is already
+    // being alerted and logs a *phone pinged key* row, neither of which is right
+    // here — this is the keyholder raising the alarm about itself, and it must
+    // not be suppressed by whatever else happens to be sounding.
+    //
+    // The alert flags are set so the Stop button in the app is live, which is
+    // the only thing that ends it. There is no timeout on the far end while a
+    // phone is attached, by design: keys that have gone past the owner's own
+    // limit should still be audible when the owner catches up with them.
+    if (_isConnected) {
+      _isAlertActive = true;
+      _armAlertTimeout();
+      unawaited(_write(BleCommands.findKey));
+    }
   }
 
   bool get proximityWarningEnabled => _proximityWarningEnabled;
@@ -2024,13 +2181,15 @@ class BleService extends ChangeNotifier {
     // A cached place name belongs to the *previous* position. Keeping it after
     // the keyholder moves would relabel the new coordinates with the old
     // neighbourhood, which is the mistake the old hardcoded
-    // `"Mission District, CA"` made permanent. Phase 4 refills it from a real
-    // reverse-geocode.
-    if (lat != _lastLat || lng != _lastLng) _locationName = '';
+    // `"Mission District, CA"` made permanent.
+    final moved = lat != _lastLat || lng != _lastLng;
+    if (moved) _locationName = '';
 
     _lastLat = lat;
     _lastLng = lng;
     _hasGpsFix = true;
+
+    if (moved) unawaited(_resolveLocationName());
   }
 
   void _armAlertTimeout() {
@@ -2179,8 +2338,8 @@ class BleService extends ChangeNotifier {
   /// more: the one thing this button must do is make the noise stop, and making
   /// the owner watch a spinner while a write times out on a link that has
   /// already gone is the worst possible moment to be unresponsive. A STOP that
-  /// fails to reach a keyholder is covered anyway — its buzzer times out on its
-  /// own, which is what [_alertAutoClear] mirrors.
+  /// cannot be delivered at all is covered by the keyholder's own orphan
+  /// timeout, which only runs while no authenticated phone is attached.
   Future<void> stopAlert() async {
     _alertTimer?.cancel();
     _isPinging = false;
@@ -2231,13 +2390,6 @@ class BleService extends ChangeNotifier {
 
   Future<void> connectDevice(String id) async {
     final entry = _discovered[id];
-    if (entry != null && entry.isDemo) {
-      _lastError =
-          'This is a Demo Mode entry, not real hardware. Turn Demo Mode off in '
-          'Settings to connect to your keyholder.';
-      notifyListeners();
-      return;
-    }
     if (entry != null && entry.isLockedToAnotherOwner) {
       _lastError =
           'This keyholder belongs to someone else. Its owner must release it '
@@ -2255,7 +2407,24 @@ class BleService extends ChangeNotifier {
     await connectToDevice(radio);
   }
 
+  /// Undoes a deliberate Disconnect, in memory and on disk.
+  ///
+  /// Called from every path where the owner is asking for the link back, so the
+  /// automatic reconnect starts working again from that moment on.
+  void _clearUserDisconnect() {
+    if (!_userDisconnected) return;
+    _userDisconnected = false;
+    unawaited(_settings?.setUserDisconnected(false) ?? Future<void>.value());
+  }
+
   Future<void> disconnectDevice(String id) async {
+    // Set before the radio is touched, not after. `device.disconnect()` makes
+    // the connection-state listener fire, and that path resumes hunting by
+    // default — so by the time the awaits below finish, an automatic reconnect
+    // is already on its way unless this flag is standing in front of it.
+    _userDisconnected = true;
+    unawaited(_settings?.setUserDisconnected(true) ?? Future<void>.value());
+
     // An explicit Disconnect also ends the hunt, or the app would reconnect a
     // few seconds later and the button would appear not to work.
     endContinuousScan();
@@ -2291,6 +2460,7 @@ class BleService extends ChangeNotifier {
       return;
     }
 
+    _clearUserDisconnect();
     final known = _knownDeviceId;
     if (known != null && _radios.containsKey(known)) {
       await connectDevice(known);
@@ -2530,91 +2700,11 @@ class BleService extends ChangeNotifier {
   }
 
   // ===========================================================================
-  // Demo Mode
-  // ===========================================================================
-
-  /// Turns simulated data on or off.
-  ///
-  /// Off by default and never enabled implicitly. Everything it produces is
-  /// flagged [BleDevice.isDemo], which [connectDevice] refuses, so a simulated
-  /// entry can never be claimed, authenticated, or mistaken for a real
-  /// keyholder — the point being that Demo Mode must not be able to hide a real
-  /// security state.
-  Future<void> setDemoModeEnabled(bool value) async {
-    if (_demoModeEnabled == value) return;
-    _demoModeEnabled = value;
-    await _settings?.setDemoModeEnabled(value);
-
-    if (value) {
-      _startDemoMode();
-    } else {
-      _stopDemoMode();
-    }
-    notifyListeners();
-  }
-
-  void _startDemoMode() {
-    if (_isConnected) {
-      // Real hardware wins. Demo data must never overlay a live session.
-      _demoModeEnabled = false;
-      _lastError =
-          'Disconnect from your keyholder before turning on Demo Mode.';
-      return;
-    }
-
-    final rand = Random(7); // Fixed seed: reproducible for screenshots.
-    _discovered['DEMO-KEYHOLDER'] = BleDevice(
-      id: 'DEMO-KEYHOLDER',
-      name: 'FindMe (demo)',
-      rssi: -48,
-      macAddress: 'DE:M0:00:01',
-      deviceType: BleDeviceType.keyholder,
-      ownership: OwnershipState.unclaimed,
-      isDemo: true,
-    );
-    _discovered['DEMO-HEADPHONES'] = BleDevice(
-      id: 'DEMO-HEADPHONES',
-      name: 'Wireless Headphones (demo)',
-      rssi: -63,
-      macAddress: 'DE:M0:00:02',
-      deviceType: BleDeviceType.headphones,
-      isDemo: true,
-    );
-    _rebuildScannedDevices();
-
-    _demoTimer?.cancel();
-    _demoTimer = Timer.periodic(const Duration(milliseconds: 900), (_) {
-      if (!_demoModeEnabled || _isConnected) return;
-      final rssi = -45 - rand.nextInt(30);
-      _rssiWindow.add(rssi);
-      _currentRssi = _rssiWindow.median;
-      _estimatedDistance = _proximity.distanceFor(_currentRssi!);
-      _lastRssiUpdate = DateTime.now();
-      notifyListeners();
-    });
-  }
-
-  void _stopDemoMode() {
-    _demoTimer?.cancel();
-    _demoTimer = null;
-    _discovered.removeWhere((_, d) => d.isDemo);
-    if (!_isConnected) {
-      _rssiWindow.clear();
-      _currentRssi = null;
-      _estimatedDistance = null;
-      _batteryLevel = null;
-      _lastRssiUpdate = null;
-    }
-    _rebuildScannedDevices();
-  }
-
-  // ===========================================================================
 
   @override
   void dispose() {
     _rssiTimer?.cancel();
     _alertTimer?.cancel();
-    _demoTimer?.cancel();
     _rescanTimer?.cancel();
     _scanSubscription?.cancel();
     _isScanningSubscription?.cancel();
@@ -2635,7 +2725,20 @@ class BleService extends ChangeNotifier {
       unawaited(FlutterBluePlus.stopScan());
     }
     _keepHunting = false;
-    unawaited(_connectedDevice?.disconnect() ?? Future<void>.value());
+    /* The link is deliberately NOT dropped here.
+     *
+     * This used to call `disconnect()`, and it is why the keyholder fell off as
+     * soon as the owner left the app: on Android the activity can be torn down
+     * — and this object with it — while the process and its foreground service
+     * carry on running. The GATT connection belongs to that process, not to
+     * this ChangeNotifier, so hanging up here threw away a working link for no
+     * reason and the disconnect notification fired as if the keys had been left
+     * behind.
+     *
+     * The rule the owner asked for is simple: the only thing that ends a
+     * session is the Disconnect button. Everything else is a fault to recover
+     * from. See [disconnectDevice] and [_userDisconnected].
+     */
     super.dispose();
   }
 }

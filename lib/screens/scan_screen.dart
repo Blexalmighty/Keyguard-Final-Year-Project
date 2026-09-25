@@ -555,7 +555,7 @@ class _DeviceCard extends StatelessWidget {
       // The whole card opens the pairing screen for a keyholder, so the button is
       // a shortcut rather than the only route. Non-keyholders have nothing to
       // show, so tapping them does nothing.
-      onTap: isKeyholder && !device.isDemo && !device.isLockedToAnotherOwner
+      onTap: isKeyholder && !device.isLockedToAnotherOwner
           ? () => PairingScreen.open(context, device)
           : null,
       child: AnimatedContainer(
@@ -663,9 +663,9 @@ class _DeviceCard extends StatelessWidget {
             ),
 
             // The ownership lock, stated rather than implied.
-            if (device.isDemo || device.ownership != OwnershipState.unknown) ...[
+            if (device.ownership != OwnershipState.unknown) ...[
               const SizedBox(height: 12),
-              OwnershipBadge(state: device.ownership, isDemo: device.isDemo),
+              OwnershipBadge(state: device.ownership),
             ],
             if (action.reason != null) ...[
               const SizedBox(height: 7),
@@ -685,16 +685,9 @@ class _DeviceCard extends StatelessWidget {
   /// The lock itself is enforced by the firmware — the app cannot stop anyone
   /// connecting to a BLE peripheral. But offering a Connect button that the
   /// keyholder will silently refuse is worse than not offering one, so a locked
-  /// or simulated device gets a dead button and a stated reason.
+  /// device gets a dead button and a stated reason.
   _CardAction _actionFor(
       BuildContext context, BleService bleService, BleDevice device) {
-    if (device.isDemo) {
-      return const _CardAction(
-        label: 'Demo',
-        isSecondary: true,
-        reason: 'Simulated entry — it cannot be paired with or authenticated.',
-      );
-    }
     if (device.isLockedToAnotherOwner) {
       return const _CardAction(
         label: 'Locked',

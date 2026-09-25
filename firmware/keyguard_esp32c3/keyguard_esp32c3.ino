@@ -41,12 +41,17 @@
  * ---------------------------------------------------------------------------
  * WIRING
  * ---------------------------------------------------------------------------
- *   OLED SSD1306 72x40   I2C 0x3C, GPIO 8 (SDA) / GPIO 9 (SCL)  — internal
+ * These are the pins in SECTION 1, which are the board as actually built. The
+ * list here used to disagree with them (OLED on 8/9, buzzer on 5, battery on 3)
+ * and a comment that contradicts the code is worse than no comment — it is the
+ * reason the wrong map got flashed in the first place.
+ *
+ *   OLED SSD1306 72x40   I2C 0x3C, GPIO 5 (SDA) / GPIO 6 (SCL)
  *   Red LED              GPIO 4  via 220R to GND
- *   Active buzzer 3V     GPIO 5  — digitalWrite only, NEVER tone()
+ *   Active buzzer 3V     GPIO 10 — digitalWrite only, NEVER tone()
  *   Push button          GPIO 7  to GND, INPUT_PULLUP (LOW = pressed)
  *   GPS NEO-6M           module TX -> GPIO 20 (ESP RX), module RX -> GPIO 21
- *   Battery sense        GPIO 3  via 100k/100k divider from LiPo +
+ *   Battery sense        GPIO 1  via 100k/100k divider from LiPo +
  *
  * ---------------------------------------------------------------------------
  * ARDUINO IDE SETTINGS  (all of these matter)
@@ -100,7 +105,7 @@
  * with them. The pin map is the one place the firmware makes a claim about the
  * physical world, so it is the one place that has to be checked against it. */
 #define PIN_LED        4
-#define PIN_BUZZER     3
+#define PIN_BUZZER     10
 #define PIN_BUTTON     7
 #define PIN_BATTERY    1
 #define PIN_GPS_RX     20   // ESP receives here; wire the GPS module's TX to it
@@ -221,7 +226,11 @@
 #define AUTH_TIMEOUT_MS       10000UL   // must match BleAuthParams.authTimeout
 #define MAX_AUTH_FAILURES     3
 #define LOCKOUT_MS            30000UL
-#define ALERT_MAX_MS          45000UL   // buzzer gives up rather than draining
+/* How long the buzzer keeps going with NO phone able to send STOP. While a
+ * phone is connected and authenticated there is no limit at all: the alert is
+ * the owner's to end, and one that times out mid-search is a torch that
+ * switches itself off. */
+#define ALERT_ORPHANED_MAX_MS 180000UL  // 3 minutes
 #define BATTERY_INTERVAL_MS   30000UL   // per the handout
 #define BUTTON_DEBOUNCE_MS    50UL
 #define FACTORY_RESET_HOLD_MS 10000UL
@@ -312,16 +321,29 @@ struct AlertCadence {
   uint32_t    gapMs;    // silence BETWEEN beeps of a burst (0 when burst == 1)
   uint8_t     burst;    // beeps per burst; 1 is a plain on/off cycle
   uint32_t    pauseMs;  // silence AFTER a completed burst, before it repeats
-  bool        silent;   // LED only — buzzer stays down throughout
 };
 
+/* Two rows, not six.
+ *
+ * The other four were TRIPLE, URGENT, DISCREET and SILENT, and removing them
+ * was a decision about what the owner is being asked. Three of them were
+ * rhythms — different spacings of the same single-pitch beep — presented as if
+ * they were different sounds, which is a menu of four answers to a question
+ * nobody asked. SILENT was worse than redundant: it made the device appear
+ * broken, because the app already has an alert-sound switch, and a keyholder
+ * that stays quiet for a reason its owner cannot find is a keyholder that gets
+ * returned.
+ *
+ * What is left is the real choice: one unbroken tone to walk towards, or a
+ * repeating beep that cuts through a room.
+ *
+ * ORDER IS LOAD-BEARING. g_cadenceIndex is the index into this table and it is
+ * persisted to NVS, so reordering these rows silently re-points every board
+ * already in the field. Index 1 must stay STEADY — that is the default a fresh
+ * NVS reads back, and it is the app's fallback when a token cannot be parsed. */
 static const AlertCadence ALERT_CADENCES[] = {
-  { "CONT",     60000UL,   0UL, 1,    0UL, false },  // unbroken tone
-  { "STEADY",     250UL,   0UL, 1,  250UL, false },  // the default
-  { "TRIPLE",      90UL,  80UL, 3,  700UL, false },  // three quick beeps, pause
-  { "URGENT",      60UL,   0UL, 1,   60UL, false },  // rapid chirping
-  { "DISCREET",    70UL,   0UL, 1, 2000UL, false },  // one pip every two seconds
-  { "SILENT",     400UL,   0UL, 1,  400UL, true  },  // LED flashes, buzzer silent
+  { "CONT",     60000UL,   0UL, 1,    0UL },  // unbroken tone
+  { "STEADY",     250UL,   0UL, 1,  250UL },  // the default
 };
 static const uint8_t ALERT_CADENCE_COUNT =
     sizeof(ALERT_CADENCES) / sizeof(ALERT_CADENCES[0]);
@@ -937,8 +959,9 @@ void setCadence(uint8_t index) {
   if (changed) prefs.putUChar("cadence", index);
 
   if (g_alertActive) {
-    // Reset the beep state machine but keep the original start time, so choosing
-    // a pattern repeatedly cannot extend the ALERT_MAX_MS budget indefinitely.
+    // Reset the beep state machine but keep the original start time, so
+    // choosing a pattern repeatedly cannot extend the orphaned-alert budget
+    // indefinitely.
     g_alertToggled = 0;
     g_alertBeep    = 0;
     g_alertInPause = false;
@@ -983,8 +1006,20 @@ void serviceAlert() {
   const AlertCadence& c = currentCadence();
   const uint32_t now = millis();
 
-  // Give up eventually. A buzzer left running would flatten a 700 mAh cell.
-  if (now - g_alertStarted > ALERT_MAX_MS) {
+  /* The alert runs until the owner stops it in the app.
+   *
+   * There used to be a flat 45-second cap here, and it was wrong: a keyholder
+   * that falls silent while its owner is still hunting for it under the sofa
+   * cushions is exactly when the noise is needed most. FIND_KEY now sounds
+   * until STOP arrives, or until the button on the device is pressed.
+   *
+   * The cap survives for one case only — when there is no authenticated phone
+   * on the other end. STOP can never arrive then, so without this a keyholder
+   * that lost its link mid-alert would buzz a 700 mAh cell flat and end up
+   * both silent and dead, which is the worst of both outcomes. */
+  const bool ownerCanStopIt = g_deviceConnected && g_sessionAuthed;
+  if (!ownerCanStopIt && now - g_alertStarted > ALERT_ORPHANED_MAX_MS) {
+    Serial.println(F("[ALERT] no phone to send STOP — giving up"));
     stopAlert();
     return;
   }
@@ -995,7 +1030,7 @@ void serviceAlert() {
   if (c.pauseMs == 0 && c.gapMs == 0) {
     if (!g_alertOn) {
       g_alertOn = true;
-      digitalWrite(PIN_BUZZER, c.silent ? LOW : HIGH);
+      digitalWrite(PIN_BUZZER, HIGH);
       digitalWrite(PIN_LED, HIGH);
     }
     return;
@@ -1023,10 +1058,10 @@ void serviceAlert() {
     // A gap or pause just finished: start the next beep.
     g_alertOn = true;
     g_alertInPause = false;
-    /* SILENT drives the LED and nothing else. Not the same as switching the
-     * alert off — the red LED on GPIO 4 still flashes, so the keyholder is
-     * findable in a dark bag or a quiet room where a buzzer would be rude. */
-    digitalWrite(PIN_BUZZER, c.silent ? LOW : HIGH);
+    /* Buzzer and LED together, always. Every remaining cadence makes a noise;
+     * the way to have a quiet keyholder is the alert-sound switch in the app,
+     * which is one place rather than two. */
+    digitalWrite(PIN_BUZZER, HIGH);
     digitalWrite(PIN_LED, HIGH);
   }
 }
@@ -1438,7 +1473,7 @@ void readBattery() {
     if (!g_batteryWarned) {
       g_batteryWarned = true;
       const AlertCadence& c = currentCadence();
-      if (!c.silent) chirp(c.burst, (int)min(c.onMs, 200UL));
+      chirp(c.burst, (int)min(c.onMs, 200UL));
       Serial.println("Low battery warning sounded");
     }
   } else if (percent > BATTERY_LOW_PERCENT + 5) {

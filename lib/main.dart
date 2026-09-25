@@ -14,7 +14,6 @@ import 'screens/scan_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/settings_screen.dart';
 import 'theme/app_theme.dart';
-import 'widgets/demo_mode_banner.dart';
 import 'widgets/phone_ringing_banner.dart';
 
 void main() {
@@ -245,13 +244,9 @@ class _MainNavigationState extends State<MainNavigation>
     return Scaffold(
       body: Column(
         children: [
-          // Above the IndexedStack so it is visible on every tab. See
-          // widgets/demo_mode_banner.dart for why it cannot be dismissed.
-          const DemoModeBanner(),
-
-          // Same reasoning, different urgency: the keyholder's button can be
-          // pressed while the user is on any tab, so the way to silence the
-          // phone has to be reachable from any tab.
+          // Above the IndexedStack so it is visible on every tab: the
+          // keyholder's button can be pressed while the user is on any tab, so
+          // the way to silence the phone has to be reachable from any tab.
           const PhoneRingingBanner(),
           Expanded(
             // IndexedStack keeps all four screens alive, so scroll position and

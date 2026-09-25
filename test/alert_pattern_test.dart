@@ -7,8 +7,8 @@ import 'package:keyguard/models/alert_pattern.dart';
 ///
 /// The interesting tests here are the last group: they read the Arduino sketch
 /// and assert that its cadence table and the Dart enum still agree. Two files in
-/// two languages describing the same six rhythms is exactly the kind of pair that
-/// drifts silently — someone retunes `TRIPLE` in the firmware, the app keeps
+/// two languages describing the same rhythms is exactly the kind of pair that
+/// drifts silently — someone retunes `STEADY` in the firmware, the app keeps
 /// printing the old numbers, and the caption in Settings quietly becomes a lie.
 ///
 /// It reads the `.ino` as text rather than compiling it, which is the only option
@@ -39,9 +39,13 @@ void main() {
       expect(AlertPattern.fallback, AlertPattern.steady);
     });
 
-    test('only one pattern is silent', () {
-      final silent = AlertPattern.values.where((p) => p.isSilent).toList();
-      expect(silent, [AlertPattern.silent]);
+    test('there are exactly two, and both make a noise', () {
+      // The count is asserted, not just the contents: the point of trimming this
+      // menu was that it is short, and a seventh option added without thought is
+      // how it got long the first time. Silence is the alert-sound switch's job,
+      // not a pattern's.
+      expect(AlertPattern.values,
+          [AlertPattern.continuous, AlertPattern.steady]);
     });
 
     test('every audible pattern has a non-zero beep', () {
@@ -82,7 +86,6 @@ void main() {
     test('the caption is derived from the timings, so it cannot drift', () {
       expect(AlertPattern.continuous.cadence, 'unbroken');
       expect(AlertPattern.steady.cadence, '250ms, 250ms gap');
-      expect(AlertPattern.triple.cadence, '3 × 90ms, 700ms gap');
     });
   });
 
@@ -95,9 +98,9 @@ void main() {
           File('firmware/keyguard_esp32c3/keyguard_esp32c3.ino').readAsStringSync();
 
       // Matches a row of the form:
-      //   { "STEADY", 250UL, 0UL, 1, 250UL, false },
+      //   { "STEADY", 250UL, 0UL, 1, 250UL },
       final row = RegExp(
-        r'\{\s*"([A-Z]+)"\s*,\s*(\d+)UL\s*,\s*(\d+)UL\s*,\s*(\d+)\s*,\s*(\d+)UL\s*,\s*(true|false)\s*\}',
+        r'\{\s*"([A-Z]+)"\s*,\s*(\d+)UL\s*,\s*(\d+)UL\s*,\s*(\d+)\s*,\s*(\d+)UL\s*\}',
       );
 
       firmware = row
@@ -108,7 +111,6 @@ void main() {
                 gapMs: int.parse(m.group(3)!),
                 burst: int.parse(m.group(4)!),
                 pauseMs: int.parse(m.group(5)!),
-                silent: m.group(6) == 'true',
               ))
           .toList();
     });
@@ -139,7 +141,6 @@ void main() {
         expect(fw.gapMs, dart.gapMs, reason: '${dart.wireName} gapMs');
         expect(fw.burst, dart.burst, reason: '${dart.wireName} burst');
         expect(fw.pauseMs, dart.pauseMs, reason: '${dart.wireName} pauseMs');
-        expect(fw.silent, dart.isSilent, reason: '${dart.wireName} silent');
       }
     });
 
@@ -162,7 +163,6 @@ class _FirmwareCadence {
     required this.gapMs,
     required this.burst,
     required this.pauseMs,
-    required this.silent,
   });
 
   final String token;
@@ -170,5 +170,4 @@ class _FirmwareCadence {
   final int gapMs;
   final int burst;
   final int pauseMs;
-  final bool silent;
 }
