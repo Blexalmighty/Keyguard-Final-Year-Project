@@ -154,6 +154,25 @@ class BleService extends ChangeNotifier {
   StreamSubscription<BluetoothConnectionState>? _connectionStateSubscription;
   Timer? _rssiTimer;
 
+  /// Re-reads the phone's position while a keyholder is attached.
+  ///
+  /// Without this the device was handed a position once, at launch, and then
+  /// never again — so its screen showed where the owner had been when the app
+  /// started, which after a walk across campus is worse than showing nothing.
+  /// The keyholder has no receiver of its own, so this timer is the only thing
+  /// that can keep it current.
+  Timer? _phoneLocTimer;
+
+  /// How often that happens.
+  ///
+  /// Two minutes, and the figure is a compromise with the battery rather than a
+  /// round number: a continuous position stream would hold the GPS on all day
+  /// for a screen nobody is looking at, and anything much longer than this is
+  /// stale by the time the keys are actually missed. Every fix is also pushed
+  /// the moment it arrives from any other source, so this is the floor on
+  /// freshness, not the only path.
+  static const Duration _phoneLocInterval = Duration(minutes: 2);
+
   /// Auth frames are republished so `pairing_service.dart` can drive the
   /// ownership handshake without this class owning the crypto.
   final StreamController<String> _authFrames =
@@ -1424,6 +1443,7 @@ class BleService extends ChangeNotifier {
 
       _rssiWindow.clear();
       _startRssiPolling(device);
+      _startPhoneLocationPolling();
 
       // Connected, so the run of failures is over.
       _autoConnectFailures = 0;
@@ -1694,6 +1714,7 @@ class BleService extends ChangeNotifier {
     _isAlertActive = false;
     _alertTimer?.cancel();
     _rssiTimer?.cancel();
+    _phoneLocTimer?.cancel();
     _negotiatedMtu = 0;
 
     // A dropped link is not a reason to keep screaming. The keyholder's own
@@ -1765,6 +1786,24 @@ class BleService extends ChangeNotifier {
     _authChar = null;
     _rssiTimer?.cancel();
     _rssiTimer = null;
+    _phoneLocTimer?.cancel();
+    _phoneLocTimer = null;
+  }
+
+  /// Keeps the keyholder's idea of "where the owner is" from going stale.
+  ///
+  /// Fires once straight away rather than waiting out the first interval: the
+  /// position at the moment of connecting is the one worth having, because that
+  /// is where the two things were last together.
+  void _startPhoneLocationPolling() {
+    _phoneLocTimer?.cancel();
+    unawaited(_refreshPhoneFix());
+    _phoneLocTimer = Timer.periodic(_phoneLocInterval, (_) {
+      if (!_isConnected) return;
+      // `_refreshPhoneFix` publishes the fix, which pushes it to the device and
+      // asks what the place is called. Nothing else needs to happen here.
+      unawaited(_refreshPhoneFix());
+    });
   }
 
   // ===========================================================================
@@ -2704,6 +2743,7 @@ class BleService extends ChangeNotifier {
   @override
   void dispose() {
     _rssiTimer?.cancel();
+    _phoneLocTimer?.cancel();
     _alertTimer?.cancel();
     _rescanTimer?.cancel();
     _scanSubscription?.cancel();

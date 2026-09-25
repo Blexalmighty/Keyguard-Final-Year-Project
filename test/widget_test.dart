@@ -64,14 +64,19 @@ void main() {
         lessThan(navBar.top));
   });
 
-  testWidgets('shows no Demo Mode banner by default', (tester) async {
+  testWidgets('never simulates a device, in any state', (tester) async {
     await tester.pumpWidget(const FindXProviders(child: FindXApp()));
     await tester.pump();
 
+    // Demo mode is gone, not merely defaulted off. It fed invented battery
+    // levels, distances and events through the same fields as the real ones, so
+    // the only way to know whether a reading was true was to remember which
+    // switch was flipped. This guards the removal rather than the default: if
+    // the banner can ever appear again, the switch has come back with it.
     expect(
       find.textContaining('DEMO MODE'),
       findsNothing,
-      reason: 'Demo Mode must be opt-in, never the default state',
+      reason: 'nothing in FindX may present simulated readings as real ones',
     );
   });
 
