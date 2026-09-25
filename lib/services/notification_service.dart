@@ -57,6 +57,11 @@ class NotificationService {
   /// owner actually set a threshold for.
   static const int _outOfRangeId = 1003;
 
+  /// Posted when the keyholder passes the owner's maximum allowance — the
+  /// outermost of the three boundaries. Its own id again, so the escalation is
+  /// visible in the shade as three rows rather than one row rewriting itself.
+  static const int _maxAllowanceId = 1004;
+
   Future<void> init() async {
     if (!supported || _ready) return;
 
@@ -204,7 +209,7 @@ class NotificationService {
         connected ? '$deviceName connected' : '$deviceName disconnected',
         connected
             ? 'In range and responding.'
-            : 'Out of range or switched off. KeyGuard is looking for it.',
+            : 'Out of range or switched off. FindX is looking for it.',
         NotificationDetails(
           android: AndroidNotificationDetails(
             _linkChannelId,
@@ -273,6 +278,65 @@ class NotificationService {
     if (!supported) return;
     try {
       await _plugin.cancel(_outOfRangeId);
+    } catch (e) {
+      debugPrint('NotificationService: cancel failed: $e');
+    }
+  }
+
+  /// The keyholder has passed the owner's maximum allowance.
+  ///
+  /// The third and last boundary. Half the alert distance is advice, the alert
+  /// distance is the warning the owner configured, and this is the line they
+  /// said should never be crossed — "my keys are further away than I would ever
+  /// deliberately leave them". It gets its own id so it does not overwrite the
+  /// out-of-range notice, and `fullScreenIntent` so it can get past a locked
+  /// screen: by definition the owner is not looking at the phone, since if they
+  /// were they would have acted on the two notices before this one.
+  Future<void> showMaxAllowanceExceeded({
+    required String deviceName,
+    required double distanceMetres,
+    required double allowanceMetres,
+  }) async {
+    if (!supported || !_permitted) return;
+    if (!_ready) await init();
+
+    final metres = distanceMetres < 10
+        ? distanceMetres.toStringAsFixed(1)
+        : distanceMetres.round().toString();
+
+    try {
+      await _plugin.show(
+        _maxAllowanceId,
+        '$deviceName has gone too far',
+        'About $metres m away — past the '
+            '${allowanceMetres.toStringAsFixed(allowanceMetres < 10 ? 1 : 0)} m '
+            'limit you set. Its last position has been saved.',
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            _channelId,
+            'Proximity warnings',
+            channelDescription:
+                'Warns you when your keyholder is moving out of range.',
+            importance: Importance.max,
+            priority: Priority.max,
+            playSound: true,
+            // Not `onlyAlertOnce`, unlike the two notices below it. This one
+            // fires once per departure anyway — the service latches it — and the
+            // whole point is that it should be hard to miss.
+            category: AndroidNotificationCategory.alarm,
+            fullScreenIntent: true,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('NotificationService: max-allowance notice failed: $e');
+    }
+  }
+
+  Future<void> cancelMaxAllowanceExceeded() async {
+    if (!supported) return;
+    try {
+      await _plugin.cancel(_maxAllowanceId);
     } catch (e) {
       debugPrint('NotificationService: cancel failed: $e');
     }

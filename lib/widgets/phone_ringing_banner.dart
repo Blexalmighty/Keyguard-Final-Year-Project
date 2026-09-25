@@ -63,7 +63,7 @@ class PhoneRingingBanner extends StatelessWidget {
                             ),
                             const SizedBox(height: 1),
                             Text(
-                              'You pressed the button on your KeyGuard.',
+                              'You pressed the button on your FindMe.',
                               style: AppTypography.microLabel(color: p.danger)
                                   .copyWith(
                                       fontWeight: FontWeight.w400,

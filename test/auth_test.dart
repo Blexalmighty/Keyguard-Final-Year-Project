@@ -273,19 +273,22 @@ void main() {
     });
   });
 
-  group('base64 for Wi-Fi provisioning', () {
-    test('encodes a password containing a colon without breaking the frame', () {
-      // WIFI_SET:<ssid>:<pass> is colon-delimited, so a colon in the password
-      // would split the frame in the wrong place. Base64's alphabet has no
-      // colon, which is why the credentials are encoded at all.
+  group('base64 helper', () {
+    // Kept after Wi-Fi provisioning was removed because `toBase64` is still the
+    // app's one way of putting arbitrary text into a colon-delimited frame, and
+    // these two cases are what make it safe to do so.
+    test('encodes text containing a colon without breaking the frame', () {
+      // Every frame in this protocol is colon-delimited, so a colon inside a
+      // value would split it in the wrong place. Base64's alphabet has no
+      // colon in it.
       final encoded = OwnerIdentity.toBase64('pa:ss:word');
       expect(encoded, isNot(contains(':')));
       expect(utf8.decode(base64.decode(encoded)), 'pa:ss:word');
     });
 
-    test('round-trips a non-ASCII SSID', () {
-      const ssid = 'Àwọn Kéyì';
-      expect(utf8.decode(base64.decode(OwnerIdentity.toBase64(ssid))), ssid);
+    test('round-trips non-ASCII text', () {
+      const text = 'Àwọn Kéyì';
+      expect(utf8.decode(base64.decode(OwnerIdentity.toBase64(text))), text);
     });
   });
 
@@ -314,8 +317,9 @@ void main() {
       // on one characteristic, and an unauthenticated write of FIND_KEY would
       // be indistinguishable from an auth attempt.
       expect(BleUuids.authChar, isNot(BleUuids.dataChar));
-      expect(BleUuids.provChar, isNot(BleUuids.dataChar));
-      expect(BleUuids.provChar, isNot(BleUuids.authChar));
+      // There was a third UUID here, `provChar`, for Wi-Fi credentials. The
+      // app no longer declares it: the keyholder is a Bluetooth device and
+      // nothing else.
     });
   });
 

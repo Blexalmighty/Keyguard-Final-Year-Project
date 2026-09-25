@@ -1,5 +1,5 @@
 /* ===========================================================================
- * KeyGuard — BLE object locator with owner-locked pairing
+ * FindX — BLE object locator with owner-locked pairing
  * ESP32-C3 Super Mini (AOICRIE) + onboard 0.42" OLED
  *
  * Two-Way BLE-Based Object Proximity Alert System for Personal Item Recovery
@@ -41,12 +41,17 @@
  * ---------------------------------------------------------------------------
  * WIRING
  * ---------------------------------------------------------------------------
- *   OLED SSD1306 72x40   I2C 0x3C, GPIO 8 (SDA) / GPIO 9 (SCL)  — internal
+ * These are the pins in SECTION 1, which are the board as actually built. The
+ * list here used to disagree with them (OLED on 8/9, buzzer on 5, battery on 3)
+ * and a comment that contradicts the code is worse than no comment — it is the
+ * reason the wrong map got flashed in the first place.
+ *
+ *   OLED SSD1306 72x40   I2C 0x3C, GPIO 5 (SDA) / GPIO 6 (SCL)
  *   Red LED              GPIO 4  via 220R to GND
- *   Active buzzer 3V     GPIO 5  — digitalWrite only, NEVER tone()
+ *   Active buzzer 3V     GPIO 10 — digitalWrite only, NEVER tone()
  *   Push button          GPIO 7  to GND, INPUT_PULLUP (LOW = pressed)
  *   GPS NEO-6M           module TX -> GPIO 20 (ESP RX), module RX -> GPIO 21
- *   Battery sense        GPIO 3  via 100k/100k divider from LiPo +
+ *   Battery sense        GPIO 1  via 100k/100k divider from LiPo +
  *
  * ---------------------------------------------------------------------------
  * ARDUINO IDE SETTINGS  (all of these matter)
@@ -88,15 +93,26 @@
  * SECTION 1 — Pins and hardware constants
  * =========================================================================== */
 
+/* These match the board as actually built and wired, which is not the same as
+ * the map this file shipped with. The earlier map (buzzer 5, battery 3, I2C
+ * 8/9) collided head-on with the physical build: GPIO 5 is the OLED's SDA line
+ * on this board, so a buzzer defined there drives the display bus, and a
+ * battery ADC on GPIO 3 reads the buzzer pin. Flashing the old map onto this
+ * hardware gives a dead display and a nonsense battery reading, which is
+ * exactly what it did.
+ *
+ * If you rewire the board, change these — and docs/images/wiring_diagram.svg
+ * with them. The pin map is the one place the firmware makes a claim about the
+ * physical world, so it is the one place that has to be checked against it. */
 #define PIN_LED        4
-#define PIN_BUZZER     5
+#define PIN_BUZZER     10
 #define PIN_BUTTON     7
-#define PIN_BATTERY    3
+#define PIN_BATTERY    1
 #define PIN_GPS_RX     20   // ESP receives here; wire the GPS module's TX to it
 #define PIN_GPS_TX     21   // ESP transmits here; wire the GPS module's RX to it
 
-#define I2C_SDA        8
-#define I2C_SCL        9
+#define I2C_SDA        5
+#define I2C_SCL        6
 #define OLED_ADDRESS   0x3C
 
 /* The 0.42" panel is driven by a full SSD1306 controller but only a 72x40 window
@@ -144,10 +160,10 @@
  * data instead, for two reasons. It keeps the advertised identity constant, and
  * "BLE-Keyholder" did not fit: 15 bytes of name plus 18 of service UUID plus 3
  * of flags overruns the 31-byte legacy advertising packet, and the ESP32 BLE
- * library drops the overflowing field without saying so. "KeyGuard" is 8
- * characters, which is exactly the budget that remains.
+ * library drops the overflowing field without saying so. "FindMe" is 7
+ * characters, inside the 8 the budget allows.
  * Full mitigation needs resolvable private addresses; see docs/SECURITY_MODEL.md */
-#define ADV_NAME "KeyGuard"
+#define ADV_NAME "FindMe"
 
 /* Claim state, advertised as one byte of service data under SERVICE_UUID so the
  * app can tell an unclaimed keyholder from somebody else's before connecting.
@@ -163,6 +179,13 @@
 #define CMD_AUTH       "AUTH:"
 #define CMD_UNCLAIM    "UNCLAIM"
 #define CMD_WIFI_SET   "WIFI_SET:"
+/* PHONE_LOC:<lat>,<lng> — where the PHONE is. Every other position in this
+ * protocol travels device -> phone; this one comes the other way, because this
+ * board has no GPS module on most builds and its own location screen therefore
+ * has nothing to show. It answers the opposite question to the app: "where was
+ * my phone last seen", read off this screen when the phone is the thing that is
+ * missing. Mirrored in BleCommands.phoneLocPrefix. */
+#define CMD_PHONE_LOC  "PHONE_LOC:"
 /* ALERT_SET:<token> — pick the buzzer cadence. The phone sends a NAME, never
  * milliseconds, so the numbers below can be retuned without the app agreeing to
  * anything. Tokens must match AlertPattern.wireName in lib/models/alert_pattern.dart */
@@ -203,7 +226,11 @@
 #define AUTH_TIMEOUT_MS       10000UL   // must match BleAuthParams.authTimeout
 #define MAX_AUTH_FAILURES     3
 #define LOCKOUT_MS            30000UL
-#define ALERT_MAX_MS          45000UL   // buzzer gives up rather than draining
+/* How long the buzzer keeps going with NO phone able to send STOP. While a
+ * phone is connected and authenticated there is no limit at all: the alert is
+ * the owner's to end, and one that times out mid-search is a torch that
+ * switches itself off. */
+#define ALERT_ORPHANED_MAX_MS 180000UL  // 3 minutes
 #define BATTERY_INTERVAL_MS   30000UL   // per the handout
 #define BUTTON_DEBOUNCE_MS    50UL
 #define FACTORY_RESET_HOLD_MS 10000UL
@@ -251,6 +278,23 @@ double  g_lastLat = 0.0;
 double  g_lastLng = 0.0;
 bool    g_hasFix  = false;
 
+/* Where the PHONE last said it was, from CMD_PHONE_LOC.
+ *
+ * Kept apart from g_lastLat/g_lastLng on purpose. Those belong to this board's
+ * own GPS, and folding the phone's position into them would mean the next NMEA
+ * sentence silently overwrote it — or worse, that GET_LOC answered the app with
+ * the app's own coordinates and the phone believed it had located its keys. */
+double   g_phoneLat     = 0.0;
+double   g_phoneLng     = 0.0;
+bool     g_hasPhoneFix  = false;
+uint32_t g_phoneLocAt   = 0;   // millis() of the last accepted push
+
+/* How long a pushed phone position stays on the screen before it is treated as
+ * no information at all. Twelve hours: long enough to cover a night, short
+ * enough that a board left in a drawer for a week does not point at where the
+ * owner happened to be standing last Tuesday as if it were current. */
+#define PHONE_LOC_MAX_AGE_MS (12UL * 60UL * 60UL * 1000UL)
+
 /* --- Alert cadences ---------------------------------------------------------
  *
  * WHY THESE ARE RHYTHMS AND NOT RINGTONES. The buzzer on GPIO 5 is an ACTIVE
@@ -277,16 +321,29 @@ struct AlertCadence {
   uint32_t    gapMs;    // silence BETWEEN beeps of a burst (0 when burst == 1)
   uint8_t     burst;    // beeps per burst; 1 is a plain on/off cycle
   uint32_t    pauseMs;  // silence AFTER a completed burst, before it repeats
-  bool        silent;   // LED only — buzzer stays down throughout
 };
 
+/* Two rows, not six.
+ *
+ * The other four were TRIPLE, URGENT, DISCREET and SILENT, and removing them
+ * was a decision about what the owner is being asked. Three of them were
+ * rhythms — different spacings of the same single-pitch beep — presented as if
+ * they were different sounds, which is a menu of four answers to a question
+ * nobody asked. SILENT was worse than redundant: it made the device appear
+ * broken, because the app already has an alert-sound switch, and a keyholder
+ * that stays quiet for a reason its owner cannot find is a keyholder that gets
+ * returned.
+ *
+ * What is left is the real choice: one unbroken tone to walk towards, or a
+ * repeating beep that cuts through a room.
+ *
+ * ORDER IS LOAD-BEARING. g_cadenceIndex is the index into this table and it is
+ * persisted to NVS, so reordering these rows silently re-points every board
+ * already in the field. Index 1 must stay STEADY — that is the default a fresh
+ * NVS reads back, and it is the app's fallback when a token cannot be parsed. */
 static const AlertCadence ALERT_CADENCES[] = {
-  { "CONT",     60000UL,   0UL, 1,    0UL, false },  // unbroken tone
-  { "STEADY",     250UL,   0UL, 1,  250UL, false },  // the default
-  { "TRIPLE",      90UL,  80UL, 3,  700UL, false },  // three quick beeps, pause
-  { "URGENT",      60UL,   0UL, 1,   60UL, false },  // rapid chirping
-  { "DISCREET",    70UL,   0UL, 1, 2000UL, false },  // one pip every two seconds
-  { "SILENT",     400UL,   0UL, 1,  400UL, true  },  // LED flashes, buzzer silent
+  { "CONT",     60000UL,   0UL, 1,    0UL },  // unbroken tone
+  { "STEADY",     250UL,   0UL, 1,  250UL },  // the default
 };
 static const uint8_t ALERT_CADENCE_COUNT =
     sizeof(ALERT_CADENCES) / sizeof(ALERT_CADENCES[0]);
@@ -443,19 +500,35 @@ void showIdleScreen() {
     showOnOLED("OWNER", "CONNECTED", String(g_batteryPercent) + "%");
     return;
   }
-  showOnOLED("KEYGUARD", "LOCKED", String(g_batteryPercent) + "%");
+  showOnOLED("FINDME", "LOCKED", String(g_batteryPercent) + "%");
 }
 
+/* What the screen shows when the owner presses the button to ask "where?".
+ *
+ * Two sources, and the order matters. This board's own GPS wins when it has a
+ * fix, because that is where the KEYHOLDER is. Failing that it falls back to
+ * the last position the phone pushed over PHONE_LOC:, which answers the other
+ * question — where the PHONE was when they were last together, which is the
+ * useful answer when the phone is the thing that has gone missing.
+ *
+ * Before PHONE_LOC: existed, a board with no GPS module sat on "NO GPS FIX"
+ * forever and the screen was decoration. */
 void showLastLocation() {
-  if (!g_hasFix) {
-    showOnOLED("LAST SEEN", "NO GPS FIX");
+  if (g_hasFix) {
+    // Four decimals is about 11 m — more than the NEO-6M delivers, and it keeps
+    // the two lines the same width, which reads better on 72 px.
+    showOnOLED("LAST SEEN",
+               String(g_lastLat, 4),
+               String(g_lastLng, 4));
     return;
   }
-  // Six decimals is about 0.1 m — more than the NEO-6M delivers, but it keeps
-  // the two lines the same width, which reads better on 72 px.
-  showOnOLED("LAST SEEN",
-             String(g_lastLat, 4),
-             String(g_lastLng, 4));
+  if (g_hasPhoneFix && (millis() - g_phoneLocAt) < PHONE_LOC_MAX_AGE_MS) {
+    showOnOLED("PHONE AT",
+               String(g_phoneLat, 4),
+               String(g_phoneLng, 4));
+    return;
+  }
+  showOnOLED("LAST SEEN", "NO GPS FIX");
 }
 
 /* ===========================================================================
@@ -816,6 +889,45 @@ void notifyCadence() {
   notifyData(String(RSP_ALERT) + currentCadence().token);
 }
 
+/* PHONE_LOC:<lat>,<lng> — record where the phone says it is.
+ *
+ * Validated rather than trusted. A malformed frame, or the 0,0 that a phone
+ * with no fix reports, must not become a position: "LAST SEEN 0.0000 0.0000"
+ * is a lie that looks like data, and the null island is in the Gulf of Guinea.
+ * Same plausibility rule as isPlausibleFix() in lib/utils/coordinate_format.dart.
+ *
+ * Nothing is written to NVS. This is a live value, refreshed every time the
+ * phone moves, and flash has a finite number of erase cycles. */
+void handlePhoneLocation(const String& payload) {
+  const int comma = payload.indexOf(',');
+  if (comma <= 0 || comma == (int)payload.length() - 1) {
+    Serial.printf("[PHONE_LOC] malformed: %s\n", payload.c_str());
+    return;
+  }
+
+  const double lat = payload.substring(0, comma).toDouble();
+  const double lng = payload.substring(comma + 1).toDouble();
+
+  // toDouble() returns 0 for unparseable text, which is why the zero check and
+  // the range check are both here: they catch different failures.
+  if (lat < -90.0 || lat > 90.0 || lng < -180.0 || lng > 180.0 ||
+      (fabs(lat) < 0.0001 && fabs(lng) < 0.0001)) {
+    Serial.printf("[PHONE_LOC] implausible, ignored: %s\n", payload.c_str());
+    return;
+  }
+
+  g_phoneLat    = lat;
+  g_phoneLng    = lng;
+  g_hasPhoneFix = true;
+  g_phoneLocAt  = millis();
+  Serial.printf("[PHONE_LOC] %.6f,%.6f\n", lat, lng);
+
+  /* Nothing is redrawn here. The owner sees this position when they ask for it
+   * — stopAlert() and the button both call showLastLocation() — and a phone
+   * walking down the street pushes a new fix every few seconds, which would
+   * otherwise keep yanking the display away from whatever was on it. */
+}
+
 /* Look a token up in the table. Returns -1 for anything unrecognised, and the
  * caller ignores the command rather than guessing — silently applying the wrong
  * rhythm would be worse than doing nothing. */
@@ -847,8 +959,9 @@ void setCadence(uint8_t index) {
   if (changed) prefs.putUChar("cadence", index);
 
   if (g_alertActive) {
-    // Reset the beep state machine but keep the original start time, so choosing
-    // a pattern repeatedly cannot extend the ALERT_MAX_MS budget indefinitely.
+    // Reset the beep state machine but keep the original start time, so
+    // choosing a pattern repeatedly cannot extend the orphaned-alert budget
+    // indefinitely.
     g_alertToggled = 0;
     g_alertBeep    = 0;
     g_alertInPause = false;
@@ -893,8 +1006,20 @@ void serviceAlert() {
   const AlertCadence& c = currentCadence();
   const uint32_t now = millis();
 
-  // Give up eventually. A buzzer left running would flatten a 700 mAh cell.
-  if (now - g_alertStarted > ALERT_MAX_MS) {
+  /* The alert runs until the owner stops it in the app.
+   *
+   * There used to be a flat 45-second cap here, and it was wrong: a keyholder
+   * that falls silent while its owner is still hunting for it under the sofa
+   * cushions is exactly when the noise is needed most. FIND_KEY now sounds
+   * until STOP arrives, or until the button on the device is pressed.
+   *
+   * The cap survives for one case only — when there is no authenticated phone
+   * on the other end. STOP can never arrive then, so without this a keyholder
+   * that lost its link mid-alert would buzz a 700 mAh cell flat and end up
+   * both silent and dead, which is the worst of both outcomes. */
+  const bool ownerCanStopIt = g_deviceConnected && g_sessionAuthed;
+  if (!ownerCanStopIt && now - g_alertStarted > ALERT_ORPHANED_MAX_MS) {
+    Serial.println(F("[ALERT] no phone to send STOP — giving up"));
     stopAlert();
     return;
   }
@@ -905,7 +1030,7 @@ void serviceAlert() {
   if (c.pauseMs == 0 && c.gapMs == 0) {
     if (!g_alertOn) {
       g_alertOn = true;
-      digitalWrite(PIN_BUZZER, c.silent ? LOW : HIGH);
+      digitalWrite(PIN_BUZZER, HIGH);
       digitalWrite(PIN_LED, HIGH);
     }
     return;
@@ -933,10 +1058,10 @@ void serviceAlert() {
     // A gap or pause just finished: start the next beep.
     g_alertOn = true;
     g_alertInPause = false;
-    /* SILENT drives the LED and nothing else. Not the same as switching the
-     * alert off — the red LED on GPIO 4 still flashes, so the keyholder is
-     * findable in a dark bag or a quiet room where a buzzer would be rude. */
-    digitalWrite(PIN_BUZZER, c.silent ? LOW : HIGH);
+    /* Buzzer and LED together, always. Every remaining cadence makes a noise;
+     * the way to have a quiet keyholder is the alert-sound switch in the app,
+     * which is one place rather than two. */
+    digitalWrite(PIN_BUZZER, HIGH);
     digitalWrite(PIN_LED, HIGH);
   }
 }
@@ -1067,6 +1192,8 @@ class DataCharCallbacks : public BLECharacteristicCallbacks {
         notifyData(String(RSP_LOC) + "0.000000,0.000000");
       }
       notifyData(String(RSP_BAT) + String(g_batteryPercent));
+    } else if (command.startsWith(CMD_PHONE_LOC)) {
+      handlePhoneLocation(command.substring(strlen(CMD_PHONE_LOC)));
     } else if (command.startsWith(CMD_ALERT_SET)) {
       const String token = command.substring(strlen(CMD_ALERT_SET));
       const int8_t index = cadenceIndexForToken(token);
@@ -1346,7 +1473,7 @@ void readBattery() {
     if (!g_batteryWarned) {
       g_batteryWarned = true;
       const AlertCadence& c = currentCadence();
-      if (!c.silent) chirp(c.burst, (int)min(c.onMs, 200UL));
+      chirp(c.burst, (int)min(c.onMs, 200UL));
       Serial.println("Low battery warning sounded");
     }
   } else if (percent > BATTERY_LOW_PERCENT + 5) {
@@ -1410,6 +1537,12 @@ void serviceButton() {
     g_buttonDownAt = now;
     g_resetCountdownShown = false;
     g_lastCountdownSecond = -1;
+    /* Logged on the edge, not on the action. "The button does nothing" is two
+     * unrelated faults wearing the same shirt — the pin never moved, or it
+     * moved and the press was then dropped for want of an authenticated
+     * session. Only this line tells them apart, and without it the difference
+     * costs an afternoon. */
+    Serial.println(F("[BUTTON] down"));
     return;
   }
 
@@ -1461,6 +1594,7 @@ void serviceButton() {
       chirp(1, 120);
     } else if (g_deviceConnected) {
       // Connected but unverified: do not hand a stranger the coordinates.
+      Serial.println(F("[BUTTON] press ignored — session not authenticated"));
       showOnOLED("NOT PAIRED", "TO OWNER");
       chirp(2);
     } else {
@@ -1476,10 +1610,41 @@ void serviceButton() {
  * SECTION 15 — setup / loop
  * =========================================================================== */
 
+/* Prints what the pins are actually doing at boot.
+ *
+ * "The battery reads 0%" has three completely different causes that look
+ * identical from the app: the divider is not connected to the pack, it is
+ * connected to the 3V3 rail instead, or the pack really is flat. The raw
+ * millivolts separate them in one glance. Cheap — about a third of a second —
+ * and it earns that back the first time it is needed. */
+void selfTest() {
+  Serial.println(F("--- self test ---"));
+
+  for (int i = 0; i < 3; i++) {
+    const uint32_t mv = analogReadMilliVolts(PIN_BATTERY);
+    Serial.printf("  battery: GPIO%d reads %lu mV -> pack %lu mV\n",
+                  PIN_BATTERY, (unsigned long)mv,
+                  (unsigned long)(mv * BATTERY_DIVIDER_RATIO));
+    delay(100);
+  }
+  Serial.println(F("  expect pack 3000-4200 mV."));
+  Serial.println(F("  under ~200 mV  -> divider not connected to the pack"));
+  Serial.println(F("  steady ~3300 mV -> divider on the 3V3 rail, not the pack"));
+
+  /* Idle must read 1: the internal pull-up holds the pin high until the switch
+   * shorts it to ground. A 0 here means the pin is already grounded, and the
+   * press will never be seen because there is no edge left to detect. */
+  Serial.printf("  button: GPIO%d idle reads %d (expect 1)\n",
+                PIN_BUTTON, digitalRead(PIN_BUTTON));
+  Serial.println(F("  press it — every press logs [BUTTON] down"));
+
+  Serial.println(F("--- end self test ---"));
+}
+
 void setup() {
   Serial.begin(115200);
   delay(300);  // let USB CDC come up so the first prints are not lost
-  Serial.println("\nKeyGuard starting");
+  Serial.println("\nFindMe starting");
 
   pinMode(PIN_LED, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
@@ -1487,8 +1652,10 @@ void setup() {
   digitalWrite(PIN_LED, LOW);
   digitalWrite(PIN_BUZZER, LOW);
 
+  selfTest();
+
   initDisplay();
-  showOnOLED("KEYGUARD", "STARTING");
+  showOnOLED("FINDME", "STARTING");
 
   // GPIO 20/21 are UART0's default pins; this only works with USB CDC On Boot
   // enabled, which moves the console to USB. See the header comment.

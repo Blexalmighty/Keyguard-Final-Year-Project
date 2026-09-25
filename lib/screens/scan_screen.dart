@@ -202,6 +202,7 @@ class ScanScreen extends StatelessWidget {
           message: bleService.lastError,
           fg: p.danger,
           bg: p.dangerSoft,
+          onDismiss: bleService.clearError,
         ),
       );
     }
@@ -252,7 +253,7 @@ class _ScanAppBar extends StatelessWidget {
                 children: [
                   const AppLogoTile(),
                   const SizedBox(width: 10),
-                  const AppWordmark('KeyGuard'),
+                  const AppWordmark('FindX'),
                 ],
               ),
 
@@ -357,6 +358,7 @@ class _InfoBanner extends StatelessWidget {
     required this.message,
     required this.fg,
     required this.bg,
+    this.onDismiss,
   });
 
   final IconData icon;
@@ -364,10 +366,17 @@ class _InfoBanner extends StatelessWidget {
   final Color fg;
   final Color bg;
 
+  /// Shows a close button when non-null.
+  ///
+  /// Only the error banner passes one. "Bluetooth is off" and the permission
+  /// hint describe a condition that is still true — dismissing those would hide
+  /// a fact, not an old message — so they stay until the condition changes.
+  final VoidCallback? onDismiss;
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.fromLTRB(12, 12, onDismiss == null ? 12 : 4, 12),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(14),
@@ -380,6 +389,15 @@ class _InfoBanner extends StatelessWidget {
           Expanded(
             child: Text(message, style: AppTypography.bodyMd(color: fg)),
           ),
+          if (onDismiss != null)
+            IconButton(
+              onPressed: onDismiss,
+              icon: Icon(Icons.close_rounded, color: fg, size: 18),
+              tooltip: 'Dismiss',
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              padding: EdgeInsets.zero,
+            ),
         ],
       ),
     );
@@ -537,7 +555,7 @@ class _DeviceCard extends StatelessWidget {
       // The whole card opens the pairing screen for a keyholder, so the button is
       // a shortcut rather than the only route. Non-keyholders have nothing to
       // show, so tapping them does nothing.
-      onTap: isKeyholder && !device.isDemo && !device.isLockedToAnotherOwner
+      onTap: isKeyholder && !device.isLockedToAnotherOwner
           ? () => PairingScreen.open(context, device)
           : null,
       child: AnimatedContainer(
@@ -645,9 +663,9 @@ class _DeviceCard extends StatelessWidget {
             ),
 
             // The ownership lock, stated rather than implied.
-            if (device.isDemo || device.ownership != OwnershipState.unknown) ...[
+            if (device.ownership != OwnershipState.unknown) ...[
               const SizedBox(height: 12),
-              OwnershipBadge(state: device.ownership, isDemo: device.isDemo),
+              OwnershipBadge(state: device.ownership),
             ],
             if (action.reason != null) ...[
               const SizedBox(height: 7),
@@ -667,16 +685,9 @@ class _DeviceCard extends StatelessWidget {
   /// The lock itself is enforced by the firmware — the app cannot stop anyone
   /// connecting to a BLE peripheral. But offering a Connect button that the
   /// keyholder will silently refuse is worse than not offering one, so a locked
-  /// or simulated device gets a dead button and a stated reason.
+  /// device gets a dead button and a stated reason.
   _CardAction _actionFor(
       BuildContext context, BleService bleService, BleDevice device) {
-    if (device.isDemo) {
-      return const _CardAction(
-        label: 'Demo',
-        isSecondary: true,
-        reason: 'Simulated entry — it cannot be paired with or authenticated.',
-      );
-    }
     if (device.isLockedToAnotherOwner) {
       return const _CardAction(
         label: 'Locked',

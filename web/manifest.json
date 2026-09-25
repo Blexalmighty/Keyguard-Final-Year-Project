@@ -1,6 +1,6 @@
 {
-    "name": "keyguard",
-    "short_name": "keyguard",
+    "name": "Find X",
+    "short_name": "Find X",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

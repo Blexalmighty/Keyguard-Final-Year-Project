@@ -57,10 +57,12 @@ class PhoneRingerService extends ChangeNotifier {
 
   /// Hard ceiling on one ring, in case nothing ever calls [stop].
   ///
-  /// In normal use `BleService` stops the ring well before this — its own alert
-  /// timeout clears after 45 s. This exists so a dropped connection or a crashed
-  /// screen cannot leave a phone screaming in someone's bag indefinitely.
-  static const Duration _maxRingDuration = Duration(minutes: 2);
+  /// Ten minutes, not the two it used to be. The ring is supposed to last until
+  /// the owner silences it in the app — a phone that gives up after two minutes
+  /// has stopped helping precisely when the search got hard, which is the point
+  /// of the whole feature. This remains only so a crashed screen cannot leave a
+  /// phone screaming in someone's bag forever.
+  static const Duration _maxRingDuration = Duration(minutes: 10);
 
   /// How long a preview plays before stopping itself.
   ///

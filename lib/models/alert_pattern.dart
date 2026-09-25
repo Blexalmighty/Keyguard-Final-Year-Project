@@ -10,10 +10,17 @@
 ///
 /// So a menu offering "Chime / Bell / Marimba" would be a menu of names for one
 /// sound. What genuinely differs is rhythm, and rhythm is what makes a beep
-/// findable: a long continuous tone is easy to localise in an open room, a fast
-/// triple-beep cuts through conversation, and a slow single pip is what you want
-/// when the keys are in a bag in a lecture hall and you would rather not
-/// announce it.
+/// findable.
+///
+/// **Why only two.** There were six, and the extra four were rhythms, not
+/// decisions: "urgent chirp" and "steady beep" answer the same question, and an
+/// owner hunting for their keys does not want to audition a menu. The two that
+/// remain are the two that genuinely behave differently — an unbroken tone,
+/// which the ear can walk towards, and a repeating beep, which carries further
+/// through noise for the same battery. A third option, "no sound at all", is
+/// not in here because it already exists as the alert-sound switch above it;
+/// having it in both places is how a device ends up silent for a reason its
+/// owner cannot find.
 ///
 /// Each pattern is defined by three numbers the firmware can act on directly.
 /// The app sends the *name*, not the numbers, so that a future firmware revision
@@ -40,56 +47,6 @@ enum AlertPattern {
     gapMs: 0,
     burst: 1,
     pauseMs: 250,
-  ),
-
-  /// Three quick beeps, then a gap. Cuts through background noise because the
-  /// ear notices the rhythm rather than the tone.
-  triple(
-    wireName: 'TRIPLE',
-    label: 'Triple pulse',
-    description: 'Three quick beeps, then a pause. Carries through noise.',
-    onMs: 90,
-    gapMs: 80,
-    burst: 3,
-    pauseMs: 700,
-  ),
-
-  /// Rapid chirping. Highest urgency; also the fastest to drain the cell.
-  urgent(
-    wireName: 'URGENT',
-    label: 'Urgent chirp',
-    description: 'Rapid chirping. Most attention-getting, hardest on battery.',
-    onMs: 60,
-    gapMs: 0,
-    burst: 1,
-    pauseMs: 60,
-  ),
-
-  /// One short pip every two seconds. For finding keys without telling the room
-  /// you have lost them.
-  discreet(
-    wireName: 'DISCREET',
-    label: 'Discreet pip',
-    description: 'One short pip every two seconds. Quiet places, lecture halls.',
-    onMs: 70,
-    gapMs: 0,
-    burst: 1,
-    pauseMs: 2000,
-  ),
-
-  /// LED only. The buzzer stays silent.
-  ///
-  /// Not the same thing as switching the alert off: the red LED on GPIO 4 still
-  /// flashes, so the keyholder is findable in a dark bag or a quiet room where a
-  /// buzzer would be rude.
-  silent(
-    wireName: 'SILENT',
-    label: 'Flash only',
-    description: 'LED flashes, buzzer stays silent. Still findable in the dark.',
-    onMs: 400,
-    gapMs: 0,
-    burst: 1,
-    pauseMs: 400,
   );
 
   const AlertPattern({
@@ -125,8 +82,6 @@ enum AlertPattern {
   /// stream of evenly spaced beeps: [triple] is three fast beeps and a rest, not
   /// six beeps at one spacing.
   final int pauseMs;
-
-  bool get isSilent => this == AlertPattern.silent;
 
   /// A one-line summary of the rhythm, for the settings row.
   ///

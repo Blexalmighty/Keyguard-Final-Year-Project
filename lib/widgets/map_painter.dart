@@ -1,25 +1,44 @@
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import 'map_tiles.dart';
 
-/// A stand-in for the map, until Google Maps is wired up.
+/// The location card's map.
 ///
-/// It deliberately does **not** draw cartography. The previous version painted
-/// water, parks, a highway and a bridge — a picture of San Francisco, rendered
-/// underneath whatever coordinates it was given. That is worse than no map: it
-/// invites the user to read streets that do not exist and were never near the
-/// keyholder. What it draws now is a coordinate grid with an accuracy halo, which
-/// is honest about being a diagram of a fix rather than a picture of a place.
+/// Given [latitude] and [longitude] this shows real cartography, fetched from
+/// OpenStreetMap — streets, buildings and their names, with the fix pinned on
+/// top. That is the point of the card: "Amphitheatre, OAU" drawn on the actual
+/// campus is something the owner can walk to, where a coordinate pair over a
+/// grey grid is something they have to go and decode somewhere else.
+///
+/// Underneath the tiles is the diagram this widget used to be, and it is still
+/// here on purpose. Tiles need a network; a fix does not. When the phone is
+/// offline the tiles quietly fail and the grid with its accuracy rings shows
+/// through, which is honest — it says "here is the fix, but not the place" —
+/// instead of a grey rectangle or a broken-image icon.
+///
+/// What it will never do again is *invent* cartography. An older version painted
+/// water, a park, a highway and a bridge — a picture of San Francisco, drawn
+/// under whatever coordinates it was handed. Streets that were never near the
+/// keyholder are worse than no streets at all.
 class MapPreviewWidget extends StatefulWidget {
   const MapPreviewWidget({
     super.key,
     required this.locationName,
     required this.coordinates,
+    this.latitude,
+    this.longitude,
     this.height = 160,
   });
 
   final String locationName;
   final String coordinates;
+
+  /// The fix, if it is known precisely enough to draw a map of. Null falls back
+  /// to the diagram.
+  final double? latitude;
+  final double? longitude;
+
   final double height;
 
   @override
@@ -65,8 +84,18 @@ class _MapPreviewWidgetState extends State<MapPreviewWidget>
               ),
             ),
 
-            // The pin sits dead centre because a single BLE-reported fix has no
-            // extent to place it within — there is nothing to pan around.
+            // Over the diagram, not under it: the diagram paints an opaque
+            // background, so it has to be the thing that shows when the tiles
+            // do not arrive rather than the thing that covers them when they
+            // do.
+            if (widget.latitude != null && widget.longitude != null)
+              MapTileLayer(
+                latitude: widget.latitude!,
+                longitude: widget.longitude!,
+              ),
+
+            // The pin sits dead centre because the tiles are laid out so that
+            // the fix lands exactly there — the viewport is centred on it.
             Center(
               child: Container(
                 width: 15,

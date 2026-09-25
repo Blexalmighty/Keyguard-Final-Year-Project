@@ -9,7 +9,7 @@ import 'package:keyguard/services/scan_list_diff.dart';
 void main() {
   BleDevice device({
     String id = 'AA:BB:CC:DD:EE:FF',
-    String name = 'KeyGuard',
+    String name = 'FindMe',
     int rssi = -60,
     bool isConnected = false,
     BleDeviceType type = BleDeviceType.keyholder,

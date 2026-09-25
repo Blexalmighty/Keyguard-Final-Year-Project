@@ -1,5 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/alert_distances.dart';
 import '../models/alert_pattern.dart';
 import '../models/history_retention.dart';
 import '../models/phone_alert_tone.dart';
@@ -27,18 +28,20 @@ class SettingsStore {
   static const String _kPhoneToneName = 'phone_alert_tone_name';
   static const String _kPhoneVibrate = 'phone_alert_vibrate';
   static const String _kSaveGpsOnDisconnect = 'save_gps_on_disconnect';
-  static const String _kWifiCloudSync = 'wifi_cloud_sync_enabled';
   static const String _kDarkMode = 'dark_mode_enabled';
-  static const String _kDemoMode = 'demo_mode_enabled';
   static const String _kAlertDistance = 'alert_distance_threshold';
+  static const String _kMaxAllowance = 'max_allowance_distance';
   static const String _kTxPower = 'rssi_tx_power';
   static const String _kPathLoss = 'rssi_path_loss_exponent';
   static const String _kHistory = 'history_events_json';
   static const String _kHistoryRetention = 'history_retention';
   static const String _kNicknamePrefix = 'device_nickname_';
   static const String _kProximityWarning = 'proximity_warning_enabled';
+  static const String _kBackgroundRunning = 'background_running_enabled';
+  static const String _kBackgroundAsked = 'background_permission_asked';
   static const String _kLastDeviceId = 'last_device_id';
   static const String _kLastDeviceName = 'last_device_name';
+  static const String _kUserDisconnected = 'user_disconnected';
 
   static Future<SettingsStore> open() async =>
       SettingsStore._(await SharedPreferences.getInstance());
@@ -99,9 +102,28 @@ class SettingsStore {
   Future<void> setSaveGpsOnDisconnect(bool v) =>
       _prefs.setBool(_kSaveGpsOnDisconnect, v);
 
-  bool get wifiCloudSyncEnabled => _prefs.getBool(_kWifiCloudSync) ?? true;
-  Future<void> setWifiCloudSyncEnabled(bool v) =>
-      _prefs.setBool(_kWifiCloudSync, v);
+  /// Whether the app should hold itself open after the owner leaves the screen.
+  ///
+  /// Defaults to true. The app's entire purpose is to notice something while
+  /// nobody is looking at it — a key finder that only watches while its screen
+  /// is open is a status display, not an alarm. The cost is one silent ongoing
+  /// notification, which Android requires and which doubles as the link status.
+  bool get backgroundRunningEnabled =>
+      _prefs.getBool(_kBackgroundRunning) ?? true;
+  Future<void> setBackgroundRunningEnabled(bool v) =>
+      _prefs.setBool(_kBackgroundRunning, v);
+
+  /// Whether the owner has already been asked for the notification permission
+  /// that background running needs.
+  ///
+  /// Tracked separately from the permission itself so a refusal is remembered
+  /// as a *decision*. Without this the app could not tell "never asked" from
+  /// "said no", and would re-prompt on every single launch — which is how an
+  /// app teaches its owner to deny things reflexively.
+  bool get backgroundPermissionAsked =>
+      _prefs.getBool(_kBackgroundAsked) ?? false;
+  Future<void> setBackgroundPermissionAsked(bool v) =>
+      _prefs.setBool(_kBackgroundAsked, v);
 
   HistoryRetention get historyRetention =>
       HistoryRetention.fromStorage(_prefs.getString(_kHistoryRetention));
@@ -111,16 +133,21 @@ class SettingsStore {
   bool get darkModeEnabled => _prefs.getBool(_kDarkMode) ?? false;
   Future<void> setDarkModeEnabled(bool v) => _prefs.setBool(_kDarkMode, v);
 
-  /// Demo mode is **off** unless explicitly switched on, and never defaults to
-  /// true — the real hardware path must be the default so the app can never
-  /// quietly present simulated state as if it were live.
-  bool get demoModeEnabled => _prefs.getBool(_kDemoMode) ?? false;
-  Future<void> setDemoModeEnabled(bool v) => _prefs.setBool(_kDemoMode, v);
-
   double get alertDistanceThreshold =>
       _prefs.getDouble(_kAlertDistance) ?? 2.0;
   Future<void> setAlertDistanceThreshold(double v) =>
       _prefs.setDouble(_kAlertDistance, v);
+
+  /// The outer boundary, beyond the alert distance.
+  ///
+  /// Defaults to [kDefaultMaxAllowance] rather than to the alert distance, so
+  /// the escalation exists on a fresh install without the owner having to
+  /// discover the setting. `BleService` clamps it to at least the alert
+  /// distance, which is the invariant that keeps the three boundaries in order.
+  double get maxAllowanceDistance =>
+      _prefs.getDouble(_kMaxAllowance) ?? kDefaultMaxAllowance;
+  Future<void> setMaxAllowanceDistance(double v) =>
+      _prefs.setDouble(_kMaxAllowance, v);
 
   // --- RSSI calibration (see ProximityModel) ---
 
@@ -165,9 +192,20 @@ class SettingsStore {
     await _prefs.remove(_kLastDeviceName);
   }
 
+  /// Whether the owner switched the link off themselves.
+  ///
+  /// Remembered across launches on purpose. Reconnecting on next launch to a
+  /// keyholder the owner had deliberately disconnected would be the app
+  /// overriding a decision, not recovering from an accident — and it is
+  /// indistinguishable, from the owner's side, from the Disconnect button not
+  /// working. Cleared by any explicit connect or scan. See `BleService`.
+  bool get userDisconnected => _prefs.getBool(_kUserDisconnected) ?? false;
+  Future<void> setUserDisconnected(bool v) =>
+      _prefs.setBool(_kUserDisconnected, v);
+
   // --- Device nicknames ---
   //
-  // A claimed keyholder advertises the generic name "KeyGuard" on purpose: a
+  // A claimed keyholder advertises the generic name "FindMe" on purpose: a
   // per-unit name in the advertising packet lets a passer-by single out *this*
   // device, and by extension follow its owner around. That is the anti-stalking
   // property in docs/SECURITY_MODEL.md and it is not negotiable.
@@ -175,7 +213,7 @@ class SettingsStore {
   // The consequence is that every claimed keyholder looks identical on screen.
   // The fix is a nickname that lives *on the phone* and never goes near the
   // radio: the owner sees "Ife's keys", a stranger scanning the room still sees
-  // nothing but "KeyGuard". Same approach Apple uses for AirTags.
+  // nothing but "FindMe". Same approach Apple uses for AirTags.
   //
   // Keyed by BLE remote id, so a phone that owns two keyholders names them
   // independently.

@@ -4,9 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../build_info.dart';
+import '../models/alert_distances.dart';
 import '../models/alert_pattern.dart';
+import '../models/ble_device.dart';
 import '../models/history_retention.dart';
 import '../models/phone_alert_tone.dart';
+import '../services/background_service.dart';
 import '../services/ble_service.dart';
 import '../services/pairing_service.dart';
 import '../services/phone_ringer_service.dart';
@@ -14,16 +17,17 @@ import '../theme/app_theme.dart';
 import '../widgets/app_logo_tile.dart';
 import '../widgets/motion.dart';
 import '../widgets/section_label.dart';
-import 'wifi_setup_screen.dart';
+import 'pairing_screen.dart';
 
-/// Settings: device info, calibration, preferences, ownership, demo mode.
+/// Settings: device info, calibration, preferences and ownership.
 ///
-/// This is the one screen that mentions Wi-Fi, and it does so as a *device*
-/// setting rather than a connection mode. The phone always reaches the keyholder
-/// over Bluetooth; giving the keyholder a network only widens how far its last
-/// reported position can travel. Framing it anywhere else — as a second way to
-/// connect, or as a tab beside Bluetooth — would offer a choice that does not
-/// exist.
+/// There is no network section any more. This screen used to carry a Cloud
+/// Reporting switch and a button that sent the keyholder Wi-Fi credentials,
+/// which together implied the keyholder could be reached over something other
+/// than Bluetooth. It cannot, and nothing in the app depends on it: the phone
+/// talks to the keyholder over BLE and stores the log itself. What stood in
+/// that place is now Set up device, which does the one thing an owner actually
+/// wanted from it — give this keyholder a name.
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
@@ -52,6 +56,7 @@ class SettingsScreen extends StatelessWidget {
                         ...staggered([
                           _Header(),
                           _DeviceInfoCard(bleService: bleService),
+                          _DeviceSetupCard(bleService: bleService),
                           const _SectionLabel('ALERT & PROXIMITY'),
                           _ThresholdCard(bleService: bleService),
                           _AlertPatternCard(bleService: bleService),
@@ -64,11 +69,13 @@ class SettingsScreen extends StatelessWidget {
                           _AppearanceCard(bleService: bleService),
                           const _SectionLabel('ALERTS & LOGGING'),
                           _PreferencesCard(bleService: bleService),
-                          const _SectionLabel('KEYHOLDER NETWORK'),
-                          _NetworkCard(bleService: bleService),
+                          _RetentionCard(bleService: bleService),
+                          if (bleService.backgroundRunningSupported) ...[
+                            const _SectionLabel('BACKGROUND'),
+                            _BackgroundCard(bleService: bleService),
+                          ],
                           const _SectionLabel('SECURITY'),
                           _OwnershipCard(bleService: bleService),
-                          _DemoModeCard(bleService: bleService),
                           _SectionLabel('DANGER ZONE', color: p.danger),
                           _DangerZone(bleService: bleService),
                         ]).expand((w) => [w, const SizedBox(height: 12)]),
@@ -168,10 +175,9 @@ class _SectionLabel extends StatelessWidget {
 
 /// The one card shape every section uses, so a new section cannot invent its own.
 class _Card extends StatelessWidget {
-  const _Card({required this.child, this.tint, this.borderColor});
+  const _Card({required this.child, this.borderColor});
 
   final Widget child;
-  final Color? tint;
   final Color? borderColor;
 
   @override
@@ -181,11 +187,7 @@ class _Card extends StatelessWidget {
       duration: AppMotion.normal,
       curve: AppMotion.standard,
       padding: const EdgeInsets.all(16),
-      decoration: AppDecorations.card(
-        p,
-        backgroundColor: tint,
-        borderColor: borderColor,
-      ),
+      decoration: AppDecorations.card(p, borderColor: borderColor),
       child: child,
     );
   }
@@ -284,9 +286,9 @@ class _DeviceInfoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
 
-    // Three states, not two. The old pill only knew "GPS Fixed" or "Searching…",
-    // so a keyholder that was not even connected still claimed to be looking for
-    // satellites.
+    // Three states, not two. The old pill only knew "GPS connected" or
+    // "Searching…", so a keyholder that was not even connected still claimed to
+    // be looking for satellites.
     final connected = bleService.isConnected;
     final fixed = bleService.hasGpsFix;
 
@@ -300,7 +302,7 @@ class _DeviceInfoCard extends StatelessWidget {
       (true, false) => (Icons.gps_not_fixed_rounded, p.warning),
     };
     final pillText =
-        !connected ? 'No link' : (fixed ? 'GPS fixed' : 'Searching…');
+        !connected ? 'No link' : (fixed ? 'GPS connected' : 'Searching…');
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -359,6 +361,118 @@ class _DeviceInfoCard extends StatelessWidget {
 }
 
 // =============================================================================
+// Set up device
+// =============================================================================
+
+/// Names this keyholder — on this phone, and nowhere else.
+///
+/// This is what replaced "Set up the keyholder's Wi-Fi". The name never reaches
+/// the radio, and that is the whole design rather than a shortcut: a claimed
+/// keyholder advertises the generic "FindMe" precisely so a stranger sweeping a
+/// room cannot pick *this* device out and follow it. Writing "Ife's keys" into
+/// the advertisement would hand that back. So the nickname lives in the phone's
+/// preferences, keyed by the device's BLE id — the owner sees their own name for
+/// it everywhere in the app, and a scanner across the room still sees nothing
+/// but FindMe. Same trade-off Apple makes for AirTags.
+class _DeviceSetupCard extends StatelessWidget {
+  const _DeviceSetupCard({required this.bleService});
+
+  final BleService bleService;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    final connected = bleService.isConnected;
+
+    return _Card(
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: p.surfaceHigh,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(Icons.drive_file_rename_outline_rounded,
+                size: 17, color: connected ? p.primary : p.muted),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Set up device',
+                    style: AppTypography.bodyLg(color: p.onSurface)),
+                const SizedBox(height: 2),
+                Text(
+                  connected
+                      ? 'Name this keyholder. The name stays on your phone — the '
+                          'device keeps advertising as FindMe.'
+                      : 'Connect to your keyholder to give it a name.',
+                  style: AppTypography.bodyMd(color: p.muted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: connected ? () => _rename(context) : null,
+            child: Text(bleService.hasNickname ? 'Rename' : 'Name it'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _rename(BuildContext context) async {
+    final controller =
+        TextEditingController(text: bleService.hasNickname ? bleService.displayName : '');
+
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Name this keyholder'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: controller,
+              autofocus: true,
+              maxLength: 24,
+              decoration: const InputDecoration(
+                hintText: "Ife's keys",
+                counterText: '',
+              ),
+              onSubmitted: (v) => Navigator.of(dialogContext).pop(v),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Only you see this. Clearing it goes back to FindMe.',
+              style: TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (name == null) return;
+    await bleService.setNickname(name.trim());
+  }
+}
+
+// =============================================================================
 // Proximity
 // =============================================================================
 
@@ -384,15 +498,61 @@ class _ThresholdCard extends StatelessWidget {
                   style: AppTypography.numeric(color: p.primary, fontSize: 20)),
             ],
           ),
-          Text('How far your keyholder may drift before the app warns you.',
-              style: AppTypography.bodyMd(color: p.muted)),
+          Text(
+            'How far your keyholder may drift before your phone notifies you. '
+            'You also get a quieter heads-up at half this distance. Neither '
+            'sounds the buzzer.',
+            style: AppTypography.bodyMd(color: p.muted),
+          ),
           Slider(
             value: bleService.alertDistanceThreshold,
-            min: 1.0,
-            max: 10.0,
+            min: kMinAlertDistance,
+            max: kMaxAlertDistance,
             divisions: 18,
             label: '${bleService.alertDistanceThreshold.toStringAsFixed(1)} m',
             onChanged: bleService.setAlertDistanceThreshold,
+          ),
+
+          // The outer boundary. Below the alert distance rather than above it,
+          // because it only means anything in relation to the number above —
+          // reading them the other way round would present a limit before the
+          // threshold it is a limit on.
+          const SizedBox(height: 4),
+          Divider(color: p.border, height: 20),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Maximum Allowance',
+                  style: AppTypography.bodyLg(color: p.onSurface)),
+              Text('${bleService.maxAllowanceDistance.toStringAsFixed(1)} m',
+                  style: AppTypography.numeric(color: p.danger, fontSize: 20)),
+            ],
+          ),
+          Text(
+            bleService.maxAllowanceActive
+                ? 'The distance your keyholder should never pass. Crossing it '
+                    'sounds the buzzer on the device — it keeps sounding until '
+                    'you tap Stop — and saves where it was.'
+                : 'Set this further out than the threshold above and the buzzer '
+                    'on the device sounds when your keyholder goes past it.',
+            style: AppTypography.bodyMd(color: p.muted),
+          ),
+          Slider(
+            value: bleService.maxAllowanceDistance,
+            // Starts at the alert distance, so the slider cannot be dragged
+            // into a position that contradicts the one above it. It is also why
+            // `maxAllowanceDistance` clamps on read: raising the threshold past
+            // a stored allowance would otherwise leave the value below `min`,
+            // which Slider asserts on rather than clamping.
+            min: bleService.alertDistanceThreshold,
+            max: kMaxAllowanceCeiling,
+            divisions: (kMaxAllowanceCeiling -
+                    bleService.alertDistanceThreshold)
+                .round()
+                .clamp(1, 60),
+            label: '${bleService.maxAllowanceDistance.toStringAsFixed(1)} m',
+            activeColor: p.danger,
+            onChanged: bleService.setMaxAllowanceDistance,
           ),
           // The halfway warning, next to the distance it halves. Off by default
           // in the sense that it is the user's first choice to make: a phone
@@ -542,10 +702,7 @@ class _PatternRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
 
-    // Flash-only is drawn in the LED's own colour rather than the brand accent,
-    // because it is the one option that makes no sound at all and that difference
-    // is worth seeing before it is read.
-    final tone = pattern.isSilent ? p.warning : p.primary;
+    final tone = p.primary;
 
     return PressableScale(
       onTap: onSelect,
@@ -605,10 +762,7 @@ class _PatternRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 6),
-            // No preview button for flash-only: there is nothing to hear, and a
-            // play button that produces silence looks broken.
-            if (!pattern.isSilent)
-              SizedBox(
+            SizedBox(
                 width: 34,
                 height: 34,
                 child: busy
@@ -838,7 +992,7 @@ class _PhoneToneCardState extends State<_PhoneToneCard> {
           Text(
             selected.overridesSilentMode
                 ? 'Plays as an alarm, so it is still heard when your phone is on '
-                    'silent. Stops when you tap Stop, or after 45 seconds.'
+                    'silent. Keeps ringing until you tap Stop.'
                 : 'Plays on the notification channel, so it stays quiet when '
                     'your phone is silenced. Pick another option if you want it '
                     'to override silent mode.',
@@ -1267,92 +1421,162 @@ class _PreferencesCard extends StatelessWidget {
 }
 
 // =============================================================================
-// Keyholder network
+// Background running
 // =============================================================================
 
-/// Wi-Fi, framed correctly.
+/// The switch that decides whether the app survives being left.
 ///
-/// This is not a second way for the phone to reach the keyholder, and it is not
-/// a transport the user selects. It is a capability given to the *device*, once,
-/// so that it can report its own position when the phone is nowhere near it.
-/// The app's connection state never mentions it.
-class _NetworkCard extends StatelessWidget {
-  const _NetworkCard({required this.bleService});
+/// Stateful for one reason: the battery-optimisation exemption is a system
+/// setting, not an app one. Nothing notifies us when it changes, and the owner
+/// changes it by leaving for a system dialog and coming back — so its value has
+/// to be re-read on return rather than held in [BleService].
+class _BackgroundCard extends StatefulWidget {
+  const _BackgroundCard({required this.bleService});
 
   final BleService bleService;
 
   @override
+  State<_BackgroundCard> createState() => _BackgroundCardState();
+}
+
+class _BackgroundCardState extends State<_BackgroundCard> {
+  /// Null until the first check comes back, so the row can stay quiet rather
+  /// than flash "not exempted" at an owner who already granted it.
+  bool? _batteryExempt;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshBatteryState();
+  }
+
+  Future<void> _refreshBatteryState() async {
+    if (!BackgroundService.isSupported) return;
+    final exempt = await BackgroundService.isBatteryOptimisationDisabled;
+    if (!mounted) return;
+    setState(() => _batteryExempt = exempt);
+  }
+
+  Future<void> _requestBatteryExemption() async {
+    final granted = await BackgroundService.requestDisableBatteryOptimisation();
+    if (!mounted) return;
+    setState(() => _batteryExempt = granted);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
-    final syncOn = bleService.wifiCloudSyncEnabled;
+    final on = widget.bleService.backgroundRunningEnabled;
 
     return _Card(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _Toggle(
-            icon: Icons.cloud_upload_rounded,
-            title: 'Cloud Reporting',
+            icon: Icons.shield_moon_rounded,
+            title: 'Keep Watching in Background',
             subtitle:
-                'Let the keyholder upload its position when it has a network.',
-            value: syncOn,
-            onChanged: bleService.setWifiCloudSyncEnabled,
+                'Stay connected after you leave the app, so alerts still reach '
+                'you. Ends only when you tap Stop on the notification or '
+                'restart your phone.',
+            value: on,
+            onChanged: (v) async {
+              await widget.bleService.setBackgroundRunningEnabled(v);
+              if (v) await _refreshBatteryState();
+            },
           ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: p.surfaceAlt,
-              borderRadius: BorderRadius.circular(11),
-              border: Border.all(color: p.border),
+
+          // The exemption only matters while the feature is on, and asking for
+          // it before then would be asking the owner to grant something for a
+          // feature they have not switched on.
+          if (on && _batteryExempt == false) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: p.warningSoft,
+                borderRadius: BorderRadius.circular(11),
+                border: Border.all(color: p.warning.withValues(alpha: 0.35)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.battery_alert_rounded,
+                          size: 15, color: p.warning),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          'Your phone may still close FindX to save battery. '
+                          'Allowing it to run unrestricted is what keeps the '
+                          'alerts working overnight.',
+                          style: AppTypography.bodyMd(
+                              color: p.onSurfaceVariant),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _requestBatteryExemption,
+                      icon: const Icon(Icons.battery_saver_rounded, size: 17),
+                      label: const Text('Allow unrestricted battery use'),
+                    ),
+                  ),
+                ],
+              ),
             ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+          ],
+
+          if (on && _batteryExempt == true) ...[
+            const SizedBox(height: 12),
+            Row(
               children: [
-                Icon(Icons.info_outline_rounded, size: 15, color: p.muted),
+                Icon(Icons.check_circle_rounded, size: 15, color: p.success),
                 const SizedBox(width: 9),
                 Expanded(
                   child: Text(
-                    bleService.wifiStatusMessage,
+                    'Battery optimisation is off for FindX, so this phone '
+                    'should not close it.',
                     style: AppTypography.bodyMd(color: p.onSurfaceVariant),
                   ),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 12),
-          _RetentionPicker(bleService: bleService),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              // Sending credentials requires a verified owner link — the
-              // provisioning characteristic is encrypted and write-only, and the
-              // firmware drops WIFI_SET from an unauthenticated session.
-              onPressed: bleService.isConnected
-                  ? () => WifiSetupScreen.open(context)
-                  : null,
-              icon: const Icon(Icons.wifi_rounded, size: 17),
-              label: Text(
-                bleService.isConnected
-                    ? 'Set up the keyholder’s Wi-Fi'
-                    : 'Connect to set up Wi-Fi',
-              ),
-            ),
-          ),
+          ],
         ],
       ),
     );
   }
 }
 
-/// How long location history is kept before the app deletes it by itself.
+// =============================================================================
+// History retention
+// =============================================================================
+/// Wraps [_RetentionPicker] in a card of its own.
 ///
-/// Lives under Cloud Reporting because that is where the owner is already
-/// thinking about what leaves the phone and what is kept. The log is a record of
-/// where the keyholder — and so its owner — has been, and the honest way to
-/// offer that is with an expiry date the owner sets, not an archive that grows
-/// forever because nobody thought about it.
+/// It used to sit inside a "Keyholder network" card, beneath a Cloud Reporting
+/// switch and a button that sent the keyholder Wi-Fi credentials. Both of those
+/// are gone: the keyholder is a Bluetooth device and nothing it knows travels
+/// anywhere but to this phone. The expiry control is not gone, and it belongs
+/// with logging — the log is a record of where the owner has been, and the
+/// honest way to offer that is with a date on which it disappears.
+class _RetentionCard extends StatelessWidget {
+  const _RetentionCard({required this.bleService});
+
+  final BleService bleService;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Card(child: _RetentionPicker(bleService: bleService));
+  }
+}
+
+/// How long location history is kept before the app deletes it by itself.
 ///
 /// Laid out as a row of chips rather than a dropdown: there are four choices,
 /// they are all short, and the current one should be readable without tapping
@@ -1453,12 +1677,39 @@ class _OwnershipCard extends StatelessWidget {
 
   final BleService bleService;
 
+  /// The connected keyholder as the scan list knows it, if it can be claimed.
+  ///
+  /// Taken from the scan list rather than built from the connection, because
+  /// [PairingScreen] needs the advertised ownership state to decide what to
+  /// offer, and only the scan carries it. A device already claimed by somebody
+  /// else is excluded: the firmware would refuse, so offering the button would
+  /// be a promise the hardware does not keep.
+  ///
+  /// A static method rather than a local in `build` so the result is final and
+  /// promotes to non-null inside the button's callback.
+  static BleDevice? _claimableAmong(List<BleDevice> devices, String id) {
+    for (final d in devices) {
+      if (d.id == id &&
+          d.deviceType == BleDeviceType.keyholder &&
+          d.ownership != OwnershipState.claimedByOther) {
+        return d;
+      }
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
     final pairing = context.watch<PairingService>();
     final owned = pairing.ownedDevices;
     final canRelease = bleService.isConnected && pairing.isAuthenticated;
+
+    // The keyholder this phone could claim right now, or null.
+    final connectedId = bleService.connectedDevice?.remoteId.str;
+    final claimTarget = owned.isEmpty && connectedId != null
+        ? _claimableAmong(bleService.scannedDevices, connectedId)
+        : null;
 
     return _Card(
       borderColor: owned.isEmpty ? null : p.success.withValues(alpha: 0.3),
@@ -1529,17 +1780,42 @@ class _OwnershipCard extends StatelessWidget {
           const SizedBox(height: 4),
           SizedBox(
             width: double.infinity,
-            child: OutlinedButton(
-              onPressed: owned.isEmpty
-                  ? null
-                  : () => _release(context, bleService, canRelease),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: p.danger,
-                side: BorderSide(color: p.danger.withValues(alpha: 0.3)),
-              ),
-              child: const Text('Release Ownership'),
-            ),
+            // Two different buttons, because the card has two different states
+            // and only one of them is about releasing. While nothing is owned,
+            // Release Ownership is permanently grey — it reads as broken, and
+            // the text above it points at a Pair screen the card gives no way
+            // to reach. So when there is a connected keyholder to claim, the
+            // button becomes the action the owner actually needs.
+            child: owned.isEmpty && claimTarget != null
+                ? FilledButton.icon(
+                    onPressed: () => PairingScreen.open(context, claimTarget),
+                    icon: const Icon(Icons.vpn_key_rounded, size: 16),
+                    label: const Text('Claim This Keyholder'),
+                  )
+                : OutlinedButton(
+                    onPressed: owned.isEmpty
+                        ? null
+                        : () => _release(context, bleService, canRelease),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: p.danger,
+                      side: BorderSide(color: p.danger.withValues(alpha: 0.3)),
+                    ),
+                    child: const Text('Release Ownership'),
+                  ),
           ),
+          if (owned.isEmpty && claimTarget == null)
+            Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Text(
+                // Why the button above is grey, said plainly. Without this the
+                // card looks broken rather than inapplicable.
+                bleService.isConnected
+                    ? 'Claiming needs the keyholder in the scan list. Open the '
+                        'Scan tab, then tap your keyholder to pair.'
+                    : 'Nothing to release yet. Connect to a keyholder first.',
+                style: AppTypography.microLabel(color: p.muted),
+              ),
+            ),
           if (owned.isNotEmpty && !canRelease)
             Padding(
               padding: const EdgeInsets.only(top: 7),
@@ -1633,87 +1909,6 @@ class _OwnershipCard extends StatelessWidget {
 }
 
 // =============================================================================
-// Demo mode
-// =============================================================================
-
-class _DemoModeCard extends StatelessWidget {
-  const _DemoModeCard({required this.bleService});
-
-  final BleService bleService;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = AppPalette.of(context);
-    final on = bleService.demoModeEnabled;
-
-    return _Card(
-      tint: on ? p.warningSoft : null,
-      borderColor: on ? p.warning : null,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              AnimatedContainer(
-                duration: AppMotion.normal,
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: on
-                      ? p.warning.withValues(alpha: 0.18)
-                      : p.surfaceHigh,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(Icons.science_rounded,
-                    size: 17, color: on ? p.warning : p.muted),
-              ),
-              const SizedBox(width: 11),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Demo Mode',
-                        style: AppTypography.bodyLg(
-                            color: on ? p.warning : p.onSurface)),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Fills the screens with simulated devices and signal data '
-                      'for presentations, behind a permanent banner.',
-                      style: AppTypography.bodyMd(color: p.muted),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              Switch(
-                value: on,
-                onChanged: (val) async {
-                  await bleService.setDemoModeEnabled(val);
-                  if (!context.mounted) return;
-                  // If the service refused — a real keyholder is connected —
-                  // say so rather than silently snapping back.
-                  if (val && !bleService.demoModeEnabled) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(bleService.lastError)),
-                    );
-                  }
-                },
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'Simulated devices cannot be paired with or authenticated. Nothing '
-            'in Demo Mode can hide the real state of your keyholder.',
-            style: AppTypography.microLabel(color: on ? p.warning : p.muted),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// =============================================================================
 // Danger zone
 // =============================================================================
 
@@ -1722,36 +1917,20 @@ class _DangerZone extends StatelessWidget {
 
   final BleService bleService;
 
+  /// Connect and Disconnect deliberately do **not** appear here any more.
+  ///
+  /// They were a second copy of the buttons on the Scan tab, which is where the
+  /// link actually lives and where its state is visible. Two controls for one
+  /// radio is how an app ends up with a Disconnect that appears not to work:
+  /// press one, look at the other, see the old label. The link is managed in one
+  /// place; this section is for the one destructive action that has no home
+  /// elsewhere.
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
-    final connected = bleService.isConnected;
 
     return Column(
       children: [
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: bleService.toggleDeviceConnection,
-            icon: Icon(
-                connected
-                    ? Icons.link_off_rounded
-                    : Icons.bluetooth_searching_rounded,
-                size: 18),
-            // Uses the real device name and reflects whether there is anything
-            // to reconnect to, instead of always saying "Keyholder 01".
-            label: Text(connected
-                ? 'Disconnect ${bleService.deviceName}'
-                : bleService.hasKnownDevice
-                    ? 'Reconnect ${bleService.deviceName}'
-                    : 'Scan for a keyholder'),
-            style: FilledButton.styleFrom(
-              backgroundColor: connected ? p.surfaceHigh : p.primary,
-              foregroundColor: connected ? p.onSurface : p.onPrimary,
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
         SizedBox(
           width: double.infinity,
           child: OutlinedButton.icon(

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/ble_device.dart';
 import '../services/ble_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/maps_launcher.dart';
 import '../widgets/app_logo_tile.dart';
 import '../widgets/battery_pill.dart';
 import '../widgets/map_painter.dart';
@@ -16,9 +17,9 @@ import '../widgets/signal_bar.dart';
 /// last seen.
 ///
 /// Note what is *not* here: any mention of which radio the connection is using.
-/// There is one connection state. Whether a given reading arrived over BLE or was
-/// reported by the keyholder through Wi-Fi is not a decision the user can make or
-/// needs to know, so surfacing it would only add a control with no action behind
+/// There is one connection state, over Bluetooth, and nothing else. An earlier
+/// version hinted at a second transport; the keyholder is a Bluetooth device
+/// and saying so once, here, is cheaper than a control with no action behind
 /// it.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -40,12 +41,23 @@ class _HomeScreenState extends State<HomeScreen>
     super.dispose();
   }
 
+  /// Starts the pulse immediately, then hands off to the service.
+  ///
+  /// The animation is started before the await rather than after it, so the
+  /// button visibly reacts on the first press even if the GATT write takes a
+  /// moment. `pingKey` flips its state up front for the same reason, and rolls
+  /// it back if the write fails — at which point `isPinging` is false and the
+  /// repeat below correctly declines to start.
   void _onPingPressed(BleService bleService) {
     if (!bleService.isConnected) return;
-    bleService.pingKey();
+    if (!mounted) return;
+
     _pingPulse.forward(from: 0.0).then((_) {
-      if (bleService.isPinging) _pingPulse.repeat(reverse: true);
+      // `mounted` because a tab switch can dispose this state while the 1.2s
+      // forward run is still going, and driving a disposed controller throws.
+      if (mounted && bleService.isPinging) _pingPulse.repeat(reverse: true);
     });
+    bleService.pingKey();
   }
 
   @override
@@ -145,7 +157,7 @@ class _AppBar extends StatelessWidget {
                 children: [
                   const AppLogoTile(),
                   const SizedBox(width: 10),
-                  const AppWordmark('KeyGuard'),
+                  const AppWordmark('FindX'),
                 ],
               ),
               BatteryPill(
@@ -246,7 +258,7 @@ class _ConnectionCard extends StatelessWidget {
                     // link there is no keyholder to name. The name is stored on
                     // the phone for the anti-stalking reason in
                     // SettingsStore.nicknameFor: a claimed keyholder
-                    // deliberately advertises the generic "KeyGuard", so the
+                    // deliberately advertises the generic "FindMe", so the
                     // radio must never carry the owner's label.
                     if (connected)
                       GestureDetector(
@@ -482,11 +494,23 @@ class _LocationCard extends StatelessWidget {
 
             AppSwap(
               child: bleService.hasGpsFix
-                  ? MapPreviewWidget(
+                  // Tappable, because what is below is a diagram and not a
+                  // street map. The tap hands the coordinates to Google Maps,
+                  // where the owner gets the real map, directions and a share
+                  // button — none of which an in-app thumbnail could offer.
+                  ? InkWell(
                       key: const ValueKey('map'),
-                      locationName: bleService.locationName,
-                      coordinates: bleService.coordinatesFormatted,
-                      height: 150,
+                      onTap: () => _openInMaps(context, bleService),
+                      child: MapPreviewWidget(
+                        locationName: bleService.locationName,
+                        coordinates: bleService.coordinatesFormatted,
+                        // Parsed here rather than inside the widget so the map
+                        // is simply absent for a malformed pair instead of the
+                        // widget having to decide what a bad fix looks like.
+                        latitude: double.tryParse(bleService.lastLat),
+                        longitude: double.tryParse(bleService.lastLng),
+                        height: 150,
+                      ),
                     )
                   : Container(
                       key: const ValueKey('nofix'),
@@ -513,34 +537,115 @@ class _LocationCard extends StatelessWidget {
               padding:
                   const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
               color: p.surfaceAlt,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(
-                      bleService.hasGpsFix
-                          ? bleService.locationName
-                          : 'Waiting for GPS fix…',
-                      style: AppTypography.bodyMd(color: p.onSurface),
-                      overflow: TextOverflow.ellipsis,
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          bleService.hasGpsFix
+                              ? bleService.locationName
+                              : 'Waiting for GPS fix…',
+                          style: AppTypography.bodyMd(color: p.onSurface),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        bleService.hasGpsFix
+                            ? bleService.coordinatesFormatted
+                            : '--',
+                        // The coordinate pair is measured data, so it takes the
+                        // accent — matching the pin and the crosshair in the
+                        // diagram above it.
+                        style: AppTypography.metadataMono(
+                            color: bleService.hasGpsFix ? p.accent : p.muted),
+                      ),
+                    ],
+                  ),
+
+                  // The phone's network address, under the position it was
+                  // recorded at. It corroborates the fix: the address is what a
+                  // server sees, so it places the phone on a network at roughly
+                  // the same moment the coordinates place it on the ground.
+                  // Hidden entirely until one is known rather than shown as a
+                  // dash — an empty labelled row here would look like a bug.
+                  if (bleService.networkAddress != null) ...[
+                    const SizedBox(height: 7),
+                    Divider(color: p.border, height: 1),
+                    const SizedBox(height: 7),
+                    Row(
+                      children: [
+                        Icon(
+                          bleService.networkAddressIsPublic
+                              ? Icons.public_rounded
+                              : Icons.router_rounded,
+                          size: 14,
+                          color: p.muted,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          // Labelled, because the two are not interchangeable: a
+                          // 192.168.x.x address says nothing about where the
+                          // phone is, and presenting it as the phone's address on
+                          // the internet would be quietly false.
+                          bleService.networkAddressIsPublic
+                              ? 'Public IP'
+                              : 'Local IP',
+                          style: AppTypography.microLabel(color: p.muted),
+                        ),
+                        const Spacer(),
+                        Text(
+                          bleService.networkAddress!,
+                          style: AppTypography.metadataMono(color: p.muted),
+                        ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    bleService.hasGpsFix
-                        ? bleService.coordinatesFormatted
-                        : '--',
-                    // The coordinate pair is measured data, so it takes the accent
-                    // — matching the pin and the crosshair in the diagram above it.
-                    style: AppTypography.metadataMono(
-                        color: bleService.hasGpsFix ? p.accent : p.muted),
-                  ),
+                  ],
+
+                  if (bleService.hasGpsFix) ...[
+                    const SizedBox(height: 7),
+                    Row(
+                      children: [
+                        Icon(Icons.open_in_new_rounded,
+                            size: 13, color: p.primary),
+                        const SizedBox(width: 6),
+                        Text('Tap the map to open in Google Maps',
+                            style: AppTypography.microLabel(color: p.primary)),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
           ],
         ),
       ),
+    );
+  }
+
+  /// Hands the last known position to the phone's maps app.
+  ///
+  /// The failure is reported rather than swallowed. A tap that does nothing is
+  /// indistinguishable from a broken card, and on a phone with neither a maps
+  /// app nor a browser this genuinely cannot succeed.
+  Future<void> _openInMaps(BuildContext context, BleService service) async {
+    final lat = double.tryParse(service.lastLat);
+    final lng = double.tryParse(service.lastLng);
+    if (lat == null || lng == null) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final opened = await openInMaps(
+      latitude: lat,
+      longitude: lng,
+      label: service.displayName,
+    );
+    if (opened) return;
+
+    messenger.showSnackBar(
+      const SnackBar(content: Text('No app on this phone can open a map.')),
     );
   }
 }

@@ -17,20 +17,13 @@ class OwnershipBadge extends StatelessWidget {
   const OwnershipBadge({
     super.key,
     required this.state,
-    this.isDemo = false,
   });
 
   final OwnershipState state;
-  final bool isDemo;
 
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
-
-    if (isDemo) {
-      return _pill('SIMULATED', Icons.science_outlined, p.warning,
-          p.warningSoft);
-    }
 
     switch (state) {
       case OwnershipState.unknown:
