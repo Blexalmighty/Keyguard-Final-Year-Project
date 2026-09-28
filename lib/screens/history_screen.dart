@@ -157,8 +157,17 @@ class HistoryScreen extends StatelessWidget {
 
     if (difference == 0) return 'TODAY';
     if (difference == 1) return 'YESTERDAY';
-    return '${day.day} ${_months[day.month - 1]} ${day.year}';
+    // Weekday included: "which Saturday" is how people remember losing things,
+    // and the number alone makes the reader count back.
+    return '${_weekdayFor(day)} ${day.day} ${_months[day.month - 1]} '
+        '${day.year}';
   }
+
+  static const List<String> _weekdays = [
+    'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN', //
+  ];
+
+  String _weekdayFor(DateTime day) => _weekdays[day.weekday - 1];
 }
 
 class _DayGroup {
@@ -382,7 +391,7 @@ class _TimelineItem extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 8),
-                          Text(event.formattedTime,
+                          Text(event.formattedDayTime,
                               style:
                                   AppTypography.metadataMono(color: p.muted)),
                         ],
@@ -423,8 +432,16 @@ class _TimelineItem extends StatelessWidget {
                           ),
                           const SizedBox(width: 4),
                           Expanded(
+                            // The place name when one was resolved, coordinates
+                            // otherwise. "Amphitheatre, Obafemi Awolowo
+                            // University" answers "where was I?"; 7.521834° N,
+                            // 4.526901° E does not, unless you are holding a
+                            // map. The numbers are still here, on the line
+                            // below, because they are the thing that is
+                            // actually recorded — the name is a lookup over
+                            // them and needs internet to exist at all.
                             child: Text(
-                              event.coordinatesFormatted,
+                              event.displayLocation,
                               style: AppTypography.metadataMono(
                                   color:
                                       event.hasLocation ? p.accent : p.muted),
@@ -437,6 +454,28 @@ class _TimelineItem extends StatelessWidget {
                           ],
                         ],
                       ),
+
+                      // Only when it would not be a repeat of the line above.
+                      if (event.hasLocation &&
+                          event.displayLocation !=
+                              event.coordinatesFormatted) ...[
+                        const SizedBox(height: 3),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 16),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  event.coordinatesFormatted,
+                                  style:
+                                      AppTypography.microLabel(color: p.muted),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

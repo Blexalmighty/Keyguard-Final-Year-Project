@@ -275,6 +275,22 @@ class EventModel {
     return '$hour:$minute';
   }
 
+  /// `SAT 14:32` — the weekday as well as the clock.
+  ///
+  /// The timeline groups rows under a date heading, which is enough while the
+  /// owner is scrolling, and not enough when they are reading one row to answer
+  /// "when did this happen?". A bare 14:32 is ambiguous on any screenshot or any
+  /// list scrolled past its heading, and the log's whole job is to be quotable
+  /// afterwards. Weekday rather than the full date because the date is directly
+  /// above; nine characters keeps the row from squeezing its own title.
+  String get formattedDayTime => '${_weekdayNames[timestamp.weekday - 1]} '
+      '$formattedTime';
+
+  /// Monday-first, matching `DateTime.weekday`'s 1..7.
+  static const List<String> _weekdayNames = [
+    'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN', //
+  ];
+
   /// True when this event carries a usable GPS position.
   bool get hasLocation => isPlausibleFix(latitude, longitude);
 
