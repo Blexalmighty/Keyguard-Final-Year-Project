@@ -3,7 +3,6 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../build_info.dart';
 import '../models/alert_distances.dart';
 import '../models/alert_pattern.dart';
 import '../models/ble_device.dart';
@@ -119,11 +118,12 @@ class _AppBar extends StatelessWidget {
               const AppLogoTile(icon: Icons.settings_rounded, size: 30),
               const SizedBox(width: 10),
               const AppWordmark('Settings'),
-              const Spacer(),
-              // The build stamp is here so a screenshot answers "which APK is
-              // this?" without asking. Sideloaded builds are easy to mix up, and
-              // debugging a layout that was already fixed is expensive.
-              Text(kBuildStamp, style: AppTypography.microLabel(color: p.muted)),
+              // The build stamp used to sit here, on the right, so a screenshot
+              // would answer "which APK is this?". Removed on request: it is
+              // developer bookkeeping shown to the owner every time they open
+              // Settings, and Android's own app info already reports the
+              // version. lib/build_info.dart went with it — it had no other
+              // caller, and a constant nothing reads is worse than no constant.
             ],
           ),
         ),
@@ -325,7 +325,13 @@ class _DeviceInfoCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(bleService.deviceName,
+                // displayName, not deviceName: the raw advertised name is
+                // whatever is burned into the board, and a unit flashed before
+                // the rename still broadcasts "KeyGuard". Showing that here
+                // made Settings contradict the rest of the app on hardware the
+                // owner has no reason to reflash. displayName prefers their own
+                // nickname, then maps the legacy names onto FindMe.
+                Text(bleService.displayName,
                     style: AppTypography.headlineMd(color: Colors.white),
                     overflow: TextOverflow.ellipsis),
                 const SizedBox(height: 2),
@@ -1448,6 +1454,10 @@ class _BackgroundCardState extends State<_BackgroundCard> {
   void initState() {
     super.initState();
     _refreshBatteryState();
+    // The owner may have granted "Allow all the time" in system settings since
+    // the last time the app looked — on Android 11+ that is the only way it can
+    // be granted, so the app has to re-read it rather than remember an answer.
+    widget.bleService.refreshBackgroundLocationGrant();
   }
 
   Future<void> _refreshBatteryState() async {
@@ -1467,6 +1477,7 @@ class _BackgroundCardState extends State<_BackgroundCard> {
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
     final on = widget.bleService.backgroundRunningEnabled;
+    final locationGranted = widget.bleService.backgroundLocationGranted;
 
     return _Card(
       child: Column(
@@ -1476,9 +1487,10 @@ class _BackgroundCardState extends State<_BackgroundCard> {
             icon: Icons.shield_moon_rounded,
             title: 'Keep Watching in Background',
             subtitle:
-                'Stay connected after you leave the app, so alerts still reach '
-                'you. Ends only when you tap Stop on the notification or '
-                'restart your phone.',
+                'Stay connected after you leave the app — including after it '
+                'is swiped away or your phone restarts — so alerts still reach '
+                'you. Ends only when you turn this off or tap Stop on the '
+                'notification.',
             value: on,
             onChanged: (v) async {
               await widget.bleService.setBackgroundRunningEnabled(v);
@@ -1486,53 +1498,46 @@ class _BackgroundCardState extends State<_BackgroundCard> {
             },
           ),
 
-          // The exemption only matters while the feature is on, and asking for
-          // it before then would be asking the owner to grant something for a
-          // feature they have not switched on.
-          if (on && _batteryExempt == false) ...[
+          // Neither permission matters while the feature is off, and asking for
+          // one then would be asking the owner to grant something for a feature
+          // they have not switched on.
+
+          // Location first: it is the one the owner is most likely to be
+          // missing, because Android will not grant it in a dialog.
+          if (on && locationGranted == false) ...[
             const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: p.warningSoft,
-                borderRadius: BorderRadius.circular(11),
-                border: Border.all(color: p.warning.withValues(alpha: 0.35)),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.battery_alert_rounded,
-                          size: 15, color: p.warning),
-                      const SizedBox(width: 9),
-                      Expanded(
-                        child: Text(
-                          'Your phone may still close FindX to save battery. '
-                          'Allowing it to run unrestricted is what keeps the '
-                          'alerts working overnight.',
-                          style: AppTypography.bodyMd(
-                              color: p.onSurfaceVariant),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _requestBatteryExemption,
-                      icon: const Icon(Icons.battery_saver_rounded, size: 17),
-                      label: const Text('Allow unrestricted battery use'),
-                    ),
-                  ),
-                ],
-              ),
+            _PermissionNotice(
+              icon: Icons.location_off_rounded,
+              message:
+                  'FindX can watch in the background but cannot record where '
+                  'events happen, because location is only allowed while the '
+                  'app is open. Set it to "Allow all the time" to keep the '
+                  'event log and your keyholder\'s screen up to date.',
+              actionIcon: Icons.my_location_rounded,
+              actionLabel: 'Open location permission',
+              onPressed: () async {
+                await widget.bleService.phoneLocation?.openAppSettings();
+                if (!mounted) return;
+                await widget.bleService.refreshBackgroundLocationGrant();
+              },
             ),
           ],
 
-          if (on && _batteryExempt == true) ...[
+          if (on && _batteryExempt == false) ...[
+            const SizedBox(height: 12),
+            _PermissionNotice(
+              icon: Icons.battery_alert_rounded,
+              message:
+                  'Your phone may still close FindX to save battery. Allowing '
+                  'it to run unrestricted is what keeps the alerts working '
+                  'overnight.',
+              actionIcon: Icons.battery_saver_rounded,
+              actionLabel: 'Allow unrestricted battery use',
+              onPressed: _requestBatteryExemption,
+            ),
+          ],
+
+          if (on && _batteryExempt == true && locationGranted == true) ...[
             const SizedBox(height: 12),
             Row(
               children: [
@@ -1540,14 +1545,79 @@ class _BackgroundCardState extends State<_BackgroundCard> {
                 const SizedBox(width: 9),
                 Expanded(
                   child: Text(
-                    'Battery optimisation is off for FindX, so this phone '
-                    'should not close it.',
+                    'Location and battery are both set the way FindX needs '
+                    'them, so this phone should keep watching even when the '
+                    'app is closed.',
                     style: AppTypography.bodyMd(color: p.onSurfaceVariant),
                   ),
                 ),
               ],
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// A "this is switched on but something is missing" block, with one button that
+/// goes and fixes it.
+///
+/// Both of the permissions background monitoring depends on are granted outside
+/// the app — one in a system dialog, one on the app's own settings page — so both
+/// need the same shape of nudge. Written once rather than twice because the two
+/// were already drifting apart in wording and padding.
+class _PermissionNotice extends StatelessWidget {
+  const _PermissionNotice({
+    required this.icon,
+    required this.message,
+    required this.actionIcon,
+    required this.actionLabel,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String message;
+  final IconData actionIcon;
+  final String actionLabel;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: p.warningSoft,
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: p.warning.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 15, color: p.warning),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  message,
+                  style: AppTypography.bodyMd(color: p.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: onPressed,
+              icon: Icon(actionIcon, size: 17),
+              label: Text(actionLabel),
+            ),
+          ),
         ],
       ),
     );

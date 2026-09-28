@@ -159,10 +159,19 @@ class BackgroundService {
       foregroundTaskOptions: ForegroundTaskOptions(
         // No repeating callback: see [_KeepAliveHandler].
         eventAction: ForegroundTaskEventAction.nothing(),
-        // Not restarted on boot. A phone restart is one of the two endings the
-        // owner named, and starting a service behind an app the user has not
-        // opened since rebooting would be presumptuous.
-        autoRunOnBoot: false,
+        // Come back after a reboot. This is what "keeps working like WhatsApp"
+        // means in practice: a phone that restarts overnight must not quietly
+        // stop watching the keyholder, leaving the owner to discover at noon
+        // that the app has been off since 3am.
+        //
+        // It is not as presumptuous as it looks. The plugin's boot receiver only
+        // starts the service if the service was running when the phone went
+        // down, so an owner who never switched background monitoring on gets
+        // nothing started on their behalf — the switch is still the switch. The
+        // permission and the receiver are declared by the plugin's own
+        // manifest; RECEIVE_BOOT_COMPLETED is named in ours as well so the
+        // reason it is there is written down somewhere.
+        autoRunOnBoot: true,
         // ...but an app *update* should not silently stop the monitoring the
         // owner switched on.
         autoRunOnMyPackageReplaced: true,
@@ -172,7 +181,8 @@ class BackgroundService {
         allowWifiLock: false,
         // Swiping the app out of Recents must NOT stop the service. This is the
         // exact behaviour the owner asked for: only the notification's Stop
-        // button, or a reboot, ends it.
+        // button or the Settings toggle ends it. Not a swipe, and — since
+        // autoRunOnBoot above — not a reboot either.
         stopWithTask: false,
       ),
     );

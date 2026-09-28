@@ -390,8 +390,16 @@ class BleService extends ChangeNotifier {
     // Unclaimed units accept data commands from anyone (that is how a keyholder
     // is set up in the first place); claimed ones accept them only from an
     // authenticated session.
+    //
+    // The third case is a board with no auth characteristic at all. There is no
+    // handshake to complete on such a link, so waiting for one to succeed means
+    // waiting forever — which is exactly what used to happen, and why the
+    // keyholder's screen showed *No GPS* while the app had a fix. This gate is
+    // only an optimisation to avoid provoking `ERR_NOT_AUTHED`; the lock that
+    // matters is the firmware's, and it is still the firmware that decides.
     final usable = _ownershipState == OwnershipState.authenticated ||
-        _ownershipState == OwnershipState.unclaimed;
+        _ownershipState == OwnershipState.unclaimed ||
+        _authChar == null;
     if (!usable) return;
 
     final frame = '${BleCommands.phoneLocPrefix}$_lastLat,$_lastLng';
@@ -1995,6 +2003,28 @@ class BleService extends ChangeNotifier {
   /// than offer one that silently does nothing.
   bool get backgroundRunningSupported => BackgroundService.isSupported;
 
+  /// Whether the phone will give this app a position while it is not on screen.
+  ///
+  /// Null until it has been checked. Read by the Settings card so it can tell
+  /// the owner that background monitoring is on but running blind, which is a
+  /// different state from "off" and needs a different sentence.
+  bool? get backgroundLocationGranted =>
+      _phoneLocation?.backgroundPermissionGranted;
+
+  /// Re-reads [backgroundLocationGranted] without prompting.
+  ///
+  /// Called when the Settings screen appears, because the owner may have
+  /// changed the grant in system settings since the last time this was asked —
+  /// which is the normal way it gets granted on Android 11 and above.
+  Future<void> refreshBackgroundLocationGrant() async {
+    final service = _phoneLocation;
+    if (service == null || !BackgroundService.isSupported) return;
+    final before = service.backgroundPermissionGranted;
+    final after = await service.refreshBackgroundPermission();
+    if (before != after) notifyListeners();
+  }
+
+
   /// Turns background monitoring on or off.
   ///
   /// Switching it on asks for notification permission first, and treats a
@@ -2020,6 +2050,24 @@ class BleService extends ChangeNotifier {
           return;
         }
       }
+      // Location while the app is not on screen. Asked here, and only here,
+      // because this is the one feature that needs it: from Android 10 a
+      // backgrounded app that asks for a position gets nothing back, so without
+      // this grant the background service would faithfully hold the BLE link
+      // open and log every event with no position on it — and the keyholder's
+      // own screen would keep showing whatever it was last told, which is the
+      // "No GPS" complaint in its other form.
+      //
+      // A refusal is not fatal and does not cancel the switch. Proximity
+      // warnings, the buzzer, the event log and the link itself all work
+      // without it; what is lost is the position stamped on events that happen
+      // while the owner is in another app. Recorded in `_lastError` so the
+      // Settings card can say so and offer the settings page, since on
+      // Android 11+ the owner has to grant this themselves in system settings
+      // rather than in a dialog.
+      final backgroundLocation =
+          await _phoneLocation?.requestBackgroundPermission() ?? false;
+
       final started = await BackgroundService.start(
         connected: _isConnected,
         deviceName: displayName,
@@ -2027,6 +2075,10 @@ class BleService extends ChangeNotifier {
       _backgroundRunningEnabled = started;
       if (!started) {
         _lastError = 'This phone would not let FindX run in the background.';
+      } else if (!backgroundLocation) {
+        _lastError =
+            'FindX will keep watching in the background, but it cannot record '
+            'where events happen until location is set to "Allow all the time".';
       }
     } else {
       await BackgroundService.stop();
@@ -2117,6 +2169,12 @@ class BleService extends ChangeNotifier {
       return;
     }
 
+    // Claim state from a board that has no separate auth characteristic. It
+    // arrives on this channel because that board has nowhere else to send it,
+    // and handling it here is what lets the rest of this class treat the link
+    // as one it may write to.
+    if (_applySimpleAuthFrame(data)) return;
+
     if (data.startsWith(BleResponses.locPrefix)) {
       _applyLocation(data.substring(BleResponses.locPrefix.length));
       notifyListeners();
@@ -2161,6 +2219,55 @@ class BleService extends ChangeNotifier {
       unawaited(_ringer?.start() ?? Future<void>.value());
       return;
     }
+  }
+
+  /// Reads claim state out of a frame from a single-channel board.
+  ///
+  /// Returns true when [data] was one of those frames and has been dealt with,
+  /// so the data handler can stop looking.
+  ///
+  /// **Why this exists.** The app's own protocol runs the ownership handshake on
+  /// a second characteristic. A board that does not expose one announces its
+  /// claim state on the data channel instead, in plain words — `AUTH:unpaired`
+  /// the moment the link comes up. Before this method, none of those words meant
+  /// anything here, so [_ownershipState] stayed [OwnershipState.unknown] for the
+  /// whole session; [pushPhoneLocation] reads that state to decide whether a
+  /// write would be refused, saw "unknown", and stayed silent. The result was
+  /// the fault that was reported: the phone had a good fix, the app showed it,
+  /// and the keyholder's own screen said *No GPS* indefinitely — because nothing
+  /// was ever sent to it.
+  bool _applySimpleAuthFrame(String data) {
+    switch (data) {
+      // Nothing stored to check against, so this board takes commands from
+      // whoever is connected. That is the same standing as an unclaimed unit.
+      case BleResponses.simpleAuthUnpaired:
+      case BleResponses.simpleAuthOkUnpaired:
+        setOwnershipState(OwnershipState.unclaimed);
+        unawaited(pushAlertPattern());
+        unawaited(pushPhoneLocation());
+        return true;
+
+      // A token matched, so this session is the owner's.
+      case BleResponses.simpleAuthOk:
+        setOwnershipState(OwnershipState.authenticated);
+        _lastError = '';
+        unawaited(pushAlertPattern());
+        unawaited(pushPhoneLocation());
+        return true;
+
+      // An owner is stored and the board is waiting to be told who this is.
+      // Treated as authenticating rather than authenticated: the writes stay
+      // held until a token comes back accepted, which is the point of the lock.
+      case BleResponses.simpleAuthRegistered:
+        setOwnershipState(OwnershipState.authenticating);
+        return true;
+
+      case BleResponses.simpleAuthDenied:
+        setOwnershipState(OwnershipState.authFailed);
+        _lastError = 'The keyholder refused this phone.';
+        return true;
+    }
+    return false;
   }
 
   /// Republished for `pairing_service.dart`; the handshake itself is not this

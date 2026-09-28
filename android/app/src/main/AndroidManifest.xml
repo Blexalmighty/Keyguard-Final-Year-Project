@@ -40,6 +40,26 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <!--
+        Location while the app is not on screen — "Allow all the time" in the
+        system dialog.
+
+        This is what makes background monitoring worth having. From Android 10
+        the two permissions above only work while the app is in front; a
+        backgrounded app that asks for a position gets nothing back. Since the
+        position stamped on every connect, disconnect and ping is read from this
+        phone, and since it is also the only position the keyholder's own screen
+        will ever have, that silence meant the log went blank and the board sat
+        on "No GPS" the moment the owner switched apps — the exact fault
+        reported.
+
+        Requested at runtime, and only when the owner turns background
+        monitoring on. Everything else in the app works without it: a refusal
+        costs background positions, not the app.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"
+        tools:targetApi="q" />
+
+    <!--
         Android 13+ replacement for location-gated Wi-Fi scanning. Also flagged
         neverForLocation for the same reason as above.
     -->
@@ -107,6 +127,18 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!--
+        Restart the monitoring after a reboot, so "like WhatsApp" holds across a
+        restart too.
+
+        The plugin's own manifest declares the boot receiver; this is the
+        permission it needs to be delivered BOOT_COMPLETED. Whether the service
+        actually comes back is still the owner's switch — BackgroundService
+        passes autoRunOnBoot the stored preference, so a phone whose owner never
+        turned background monitoring on starts nothing.
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- Bluetooth Low Energy is required, not optional: without it there is no app. -->
     <uses-feature android:name="android.hardware.bluetooth_le"

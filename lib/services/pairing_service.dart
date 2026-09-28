@@ -375,7 +375,9 @@ class PairingService extends ChangeNotifier {
     final stored = await _identity.storeKey(
       deviceId: device.remoteId.str,
       keyHex: keyHex,
-      deviceName: _ble.deviceName,
+      // displayName so the stored identity reads as FindMe (or the owner's own
+      // nickname) rather than whatever string the board happens to advertise.
+      deviceName: _ble.displayName,
     );
 
     if (!stored) {

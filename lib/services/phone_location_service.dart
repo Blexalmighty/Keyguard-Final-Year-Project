@@ -112,6 +112,13 @@ class PhoneLocationService {
   PhoneFix? _lastFix;
   PhoneLocationProblem? _lastProblem;
 
+  /// Whether Android has granted location for use while the app is not on
+  /// screen — "Allow all the time".
+  ///
+  /// Null until it has been checked once. Kept as a field rather than asked for
+  /// on every build, because the answer only changes when the owner changes it.
+  bool? _backgroundGranted;
+
   /// Guards against overlapping requests. Connect, ping and disconnect can all
   /// land inside a second or two, and three concurrent high-accuracy requests
   /// would cost battery to produce three nearly identical answers.
@@ -124,6 +131,10 @@ class PhoneLocationService {
   PhoneLocationProblem? get lastProblem => _lastProblem;
 
   bool get hasFix => _lastFix != null;
+
+  /// Last known answer to "may this app read a position while it is not on
+  /// screen?". Null before it has been checked.
+  bool? get backgroundPermissionGranted => _backgroundGranted;
 
   /// A reading good enough to stamp on an event happening right now, without
   /// waiting for the receiver.
@@ -199,6 +210,9 @@ class PhoneLocationService {
         return null;
       }
 
+      // Free information: this call had to read the permission anyway.
+      _backgroundGranted = permission == LocationPermission.always;
+
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
@@ -252,6 +266,69 @@ class PhoneLocationService {
     }
     _lastProblem = null;
     return _lastFix;
+  }
+
+  /// Re-reads whether background location is granted, without prompting.
+  Future<bool> refreshBackgroundPermission() async {
+    if (kIsWeb) return _backgroundGranted = false;
+    try {
+      final permission = await Geolocator.checkPermission();
+      return _backgroundGranted = permission == LocationPermission.always;
+    } catch (e) {
+      debugPrint('PhoneLocationService: could not read permission: $e');
+      return _backgroundGranted ?? false;
+    }
+  }
+
+  /// Asks for location while the app is not on screen — "Allow all the time".
+  ///
+  /// Returns true only if the grant is actually in place afterwards.
+  ///
+  /// **Why this is separate from the request in [_fetch].** Android will not
+  /// consider a background-location request until ordinary foreground location
+  /// is already granted: asked first, or asked together, it is refused outright
+  /// and the owner never sees a dialog. So this asks in two steps, in that
+  /// order.
+  ///
+  /// And it may well fail even so. From Android 11 the second step is not a
+  /// dialog at all — the platform declines it and expects the app to send the
+  /// owner to its settings page, where "Allow all the time" is a radio button
+  /// they have to choose themselves. A false return therefore means "walk them
+  /// to [openAppSettings]", not "the phone is broken".
+  ///
+  /// Without this grant the app is blind whenever it is not on screen: from
+  /// Android 10 a backgrounded app that asks for a position gets nothing back,
+  /// so the event log stops recording where a disconnect happened and the
+  /// keyholder's own screen keeps showing the last position it was told about.
+  /// That is the whole point of the background service, which is why the
+  /// request lives on the same switch.
+  Future<bool> requestBackgroundPermission() async {
+    if (kIsWeb) return _backgroundGranted = false;
+
+    try {
+      var permission = await Geolocator.checkPermission();
+
+      // Step one: ordinary location. Already granted in the normal case, since
+      // BleService asks for it as part of its own chain.
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.always) {
+        return _backgroundGranted = true;
+      }
+      if (permission != LocationPermission.whileInUse) {
+        // Denied, or permanently denied. There is no point asking for the
+        // stronger grant — the platform will not offer it.
+        return _backgroundGranted = false;
+      }
+
+      // Step two: the upgrade to "all the time".
+      permission = await Geolocator.requestPermission();
+      return _backgroundGranted = permission == LocationPermission.always;
+    } catch (e) {
+      debugPrint('PhoneLocationService: background request failed: $e');
+      return _backgroundGranted = false;
+    }
   }
 
   /// Opens the system location settings, for the "turn location on" prompt.

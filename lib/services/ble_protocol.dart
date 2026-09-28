@@ -214,6 +214,37 @@ class BleResponses {
 
   /// A command was sent before the session was authenticated.
   static const String notAuthed = 'ERR_NOT_AUTHED';
+
+  // ---------------------------------------------------------------------------
+  // Single-channel firmware
+  // ---------------------------------------------------------------------------
+  //
+  // Some boards expose only the data characteristic and announce their claim
+  // state on it, using `AUTH:`-prefixed words instead of the frames above. That
+  // is not a broken device — it is a simpler protocol, and it is what is on the
+  // hardware in the field.
+  //
+  // Recognising these strings is what makes the keyholder's own screen work on
+  // such a board. Until it was added, the app never learned the claim state, so
+  // every data write — including the phone's position — was withheld as
+  // "possibly unauthenticated", and the board's location page sat on "No GPS"
+  // forever while the app sat on a perfectly good fix. See
+  // BleService.pushPhoneLocation.
+
+  /// The board has no owner stored. Equivalent to [statusUnclaimed].
+  static const String simpleAuthUnpaired = 'AUTH:unpaired';
+
+  /// The board has an owner stored and is waiting for a token.
+  static const String simpleAuthRegistered = 'AUTH:registered';
+
+  /// The token matched. Equivalent to [authOk].
+  static const String simpleAuthOk = 'AUTH:ok';
+
+  /// There was nothing to match against, so the session is allowed.
+  static const String simpleAuthOkUnpaired = 'AUTH:ok_unpaired';
+
+  /// The token did not match. Equivalent to [authFail].
+  static const String simpleAuthDenied = 'AUTH:denied';
 }
 
 /// Sizes and timings that both sides must agree on.
