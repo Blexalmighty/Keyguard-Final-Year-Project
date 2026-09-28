@@ -145,6 +145,44 @@ class BleCommands {
   /// owner's position is not something an unpaired stranger may write.
   static const String phoneLocPrefix = 'PHONE_LOC:';
 
+  /// `LOCATION_NAME:<place>` — what the coordinates in [phoneLocPrefix] are
+  /// called.
+  ///
+  /// Coordinates are the record; a name is what a person can read. The
+  /// keyholder's screen is 72×40 pixels and is read by someone who has lost
+  /// their phone, so "Amphitheatre, OAU" is worth far more there than
+  /// 7.521834, 4.526901 — they cannot look the numbers up, because the thing
+  /// they would look them up on is the thing they are trying to find.
+  ///
+  /// Sent after [phoneLocPrefix], never instead of it: the name comes from a
+  /// reverse-geocoding lookup that needs internet and may never arrive, and a
+  /// keyholder that was told a name but no position would have nothing to fall
+  /// back on. The board stores it in NVS, so it survives the phone walking away.
+  static const String locationNamePrefix = 'LOCATION_NAME:';
+
+  /// `SET_DIST:<metres>` — the distance past which the keyholder should sound.
+  /// `SET_DIST:0` switches the limit off.
+  ///
+  /// Pushed so the *board* knows the owner's limit rather than only the app
+  /// knowing it. It is displayed on the keyholder when it changes, which is how
+  /// the owner confirms the setting reached the hardware, and it is kept in NVS
+  /// so the number on the screen is still right after a battery change.
+  static const String setDistancePrefix = 'SET_DIST:';
+
+  /// `DIST_EXCEEDED:<metres>` — the keyholder is further away than the owner's
+  /// maximum allowance, as measured by the app.
+  ///
+  /// The app does the measuring because only the app has both positions. This
+  /// frame is the instruction that follows: sound the buzzer and say why.
+  ///
+  /// Distinct from [findKey] on purpose. `FIND_KEY` means "the owner is looking
+  /// for these keys and pressed a button"; this means "these keys have left the
+  /// area their owner allowed", which is a different event, shows different text
+  /// on the screen, and is not something the owner asked for at that instant.
+  /// Both are ended by [stop].
+  static const String distanceExceededPrefix = 'DIST_EXCEEDED:';
+
+
   // --- Auth characteristic ---
   /// Take ownership of an unclaimed keyholder. Accepted only while the physical
   /// button is held down. Format: `CLAIM:<ownerId hex>`.
@@ -245,6 +283,30 @@ class BleResponses {
 
   /// The token did not match. Equivalent to [authFail].
   static const String simpleAuthDenied = 'AUTH:denied';
+
+  /// `LOCATION_NAME:` was stored.
+  static const String nameOk = 'NAME:ok';
+
+  /// `LOCATION_NAME:` carried nothing usable.
+  static const String nameInvalid = 'NAME:invalid';
+
+  /// `DIST_SET:ok:<metres>` — the limit the board has adopted.
+  static const String distSetPrefix = 'DIST_SET:ok:';
+
+  /// `DIST_THRESH:<metres>` — announced on connect, so the app can tell whether
+  /// the board is still carrying a limit set by some earlier session.
+  static const String distThreshPrefix = 'DIST_THRESH:';
+
+  /// `LOW_POWER:on` / `LOW_POWER:off` — whether the keyholder has dropped its
+  /// clock and is light-sleeping between radio events.
+  ///
+  /// Worth surfacing rather than hiding. Resting is the normal state of a key
+  /// finder that has been sitting in a pocket for ten minutes, and an owner who
+  /// can see that the device chose to rest reads a longer battery life rather
+  /// than a device that has gone quiet on them. The BLE link is unaffected: the
+  /// radio keeps its connection, only the CPU slows.
+  static const String lowPowerPrefix = 'LOW_POWER:';
+  static const String lowPowerOn = 'LOW_POWER:on';
 }
 
 /// Sizes and timings that both sides must agree on.

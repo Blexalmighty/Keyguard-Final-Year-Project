@@ -339,6 +339,32 @@ class _DeviceInfoCard extends StatelessWidget {
                     style: AppTypography.metadataMono(
                         color: Colors.white.withValues(alpha: 0.66)),
                     overflow: TextOverflow.ellipsis),
+
+                // Resting is good news and is shown as such. A key finder that
+                // has been still for ten minutes drops its clock to 80 MHz and
+                // sleeps between radio events; the link stays up, which is how
+                // this message reached us. Without a line saying so, an owner
+                // who noticed the device had gone quiet would reasonably
+                // conclude it had failed.
+                if (bleService.deviceResting) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(Icons.bedtime_rounded,
+                          size: 11,
+                          color: Colors.white.withValues(alpha: 0.75)),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          'Resting to save battery — still connected',
+                          style: AppTypography.microLabel(
+                              color: Colors.white.withValues(alpha: 0.75)),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),

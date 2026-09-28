@@ -191,6 +191,13 @@ class BleService extends ChangeNotifier {
   /// frame, which meant the app confidently mislabelled every position.
   String _locationName = '';
 
+  /// True while the keyholder has dropped its clock and is light-sleeping.
+  ///
+  /// Reported by the board, not inferred here. Reset on disconnect, because a
+  /// device that is not attached has not told us anything.
+  bool _deviceResting = false;
+
+
   /// Turns the coordinates above into a place name.
   ///
   /// Owned rather than injected: it holds nothing but a cache and a timestamp,
@@ -221,6 +228,7 @@ class BleService extends ChangeNotifier {
     if (cached != null) {
       if (_locationName != cached) {
         _locationName = cached;
+        unawaited(pushLocationName());
         notifyListeners();
       }
       return;
@@ -234,6 +242,9 @@ class BleService extends ChangeNotifier {
 
     _locationName = name;
     _backfillLocationName(askedLat, askedLng, name);
+    // The keyholder's screen is the one read by someone who has lost their
+    // phone, so it gets the name as soon as there is one.
+    unawaited(pushLocationName());
     notifyListeners();
   }
 
@@ -385,7 +396,52 @@ class BleService extends ChangeNotifier {
   ///   interrupting anybody over — the next fix, or the next connect, carries
   ///   it.
   Future<void> pushPhoneLocation() async {
-    if (!_isConnected || !_hasGpsFix) return;
+    if (!_hasGpsFix) return;
+    await _pushBestEffort(
+      '${BleCommands.phoneLocPrefix}$_lastLat,$_lastLng',
+      'phone location',
+    );
+    // The name, if one has been resolved, immediately after — never instead of
+    // the coordinates. See BleCommands.locationNamePrefix.
+    await pushLocationName();
+  }
+
+  /// Tells the keyholder what the place it was just sent is called.
+  ///
+  /// Silent until a lookup has produced a name, which needs internet and may
+  /// never happen. The board keeps showing coordinates in that case, which is
+  /// the correct fallback rather than a failure.
+  Future<void> pushLocationName() async {
+    if (_locationName.isEmpty) return;
+    await _pushBestEffort(
+      '${BleCommands.locationNamePrefix}$_locationName',
+      'location name',
+    );
+  }
+
+  /// Tells the keyholder the distance its owner said it should never pass.
+  ///
+  /// Pushed on connect and whenever the owner changes it, so the number on the
+  /// little screen is the number in the app. The board keeps it in NVS: the
+  /// point is that a keyholder separated from its phone still knows what it was
+  /// told.
+  Future<void> pushMaxAllowance() async {
+    final metres = maxAllowanceActive ? maxAllowanceDistance.round() : 0;
+    await _pushBestEffort(
+      '${BleCommands.setDistancePrefix}$metres',
+      'max allowance',
+    );
+  }
+
+  /// Writes [frame] if the link is up and the session may write, swallowing
+  /// failures.
+  ///
+  /// Every push in this group is advisory: the app works whether or not the
+  /// board hears it, and the next connect sends it again. Routing a failure
+  /// through `_lastError` would put a red line on the owner's screen about a
+  /// frame they never asked to be sent.
+  Future<void> _pushBestEffort(String frame, String what) async {
+    if (!_isConnected) return;
 
     // Unclaimed units accept data commands from anyone (that is how a keyholder
     // is set up in the first place); claimed ones accept them only from an
@@ -402,7 +458,6 @@ class BleService extends ChangeNotifier {
         _authChar == null;
     if (!usable) return;
 
-    final frame = '${BleCommands.phoneLocPrefix}$_lastLat,$_lastLng';
     final c = _dataChar;
     if (c == null) return;
     try {
@@ -412,8 +467,7 @@ class BleService extends ChangeNotifier {
             !c.properties.write && c.properties.writeWithoutResponse,
       );
     } catch (e) {
-      // Deliberately not routed through `_lastError`: see the doc comment.
-      debugPrint('FindMe: could not push phone location — $e');
+      debugPrint('FindMe: could not push $what — $e');
     }
   }
 
@@ -642,6 +696,11 @@ class BleService extends ChangeNotifier {
   bool get hasGpsFix => _hasGpsFix;
   String get lastLat => _lastLat;
   String get lastLng => _lastLng;
+
+  /// True when the keyholder has told us it is resting: CPU at 80 MHz, light
+  /// sleep between radio events, screen idle. The BLE link is unaffected — this
+  /// message arrived over it.
+  bool get deviceResting => _deviceResting;
 
   String get locationName {
     if (_locationName.isNotEmpty) return _locationName;
@@ -1714,6 +1773,9 @@ class BleService extends ChangeNotifier {
     final wasConnected = _isConnected;
     _isConnected = false;
     _ownershipState = OwnershipState.unknown;
+    // Nothing is known about a device that is not attached, including whether
+    // it is resting.
+    _deviceResting = false;
     _currentRssi = null;
     _estimatedDistance = null;
     _lastRssiUpdate = null;
@@ -1963,6 +2025,11 @@ class BleService extends ChangeNotifier {
     // here — this is the keyholder raising the alarm about itself, and it must
     // not be suppressed by whatever else happens to be sounding.
     //
+    // `DIST_EXCEEDED` rather than `FIND_KEY` for the same reason: the two are
+    // different events and the board says so, showing "Too far!" on its screen
+    // instead of the ordinary find-my-keys text. The owner reading that screen
+    // learns why it is sounding. Both are ended by the same Stop.
+    //
     // The alert flags are set so the Stop button in the app is live, which is
     // the only thing that ends it. There is no timeout on the far end while a
     // phone is attached, by design: keys that have gone past the owner's own
@@ -1970,7 +2037,9 @@ class BleService extends ChangeNotifier {
     if (_isConnected) {
       _isAlertActive = true;
       _armAlertTimeout();
-      unawaited(_write(BleCommands.findKey));
+      unawaited(
+        _write('${BleCommands.distanceExceededPrefix}${d.round()}'),
+      );
     }
   }
 
@@ -2175,6 +2244,28 @@ class BleService extends ChangeNotifier {
     // as one it may write to.
     if (_applySimpleAuthFrame(data)) return;
 
+    // Whether the keyholder has dropped its clock to rest. See
+    // BleResponses.lowPowerPrefix — this is information, not a fault, and the
+    // link it arrives on is proof the radio is unaffected.
+    if (data.startsWith(BleResponses.lowPowerPrefix)) {
+      final resting = data == BleResponses.lowPowerOn;
+      if (_deviceResting != resting) {
+        _deviceResting = resting;
+        notifyListeners();
+      }
+      return;
+    }
+
+    // Acknowledgements for the pushes in this class. Nothing acts on them —
+    // they are consumed here so they do not fall through to the frames below
+    // and get logged as something unrecognised.
+    if (data == BleResponses.nameOk ||
+        data == BleResponses.nameInvalid ||
+        data.startsWith(BleResponses.distSetPrefix) ||
+        data.startsWith(BleResponses.distThreshPrefix)) {
+      return;
+    }
+
     if (data.startsWith(BleResponses.locPrefix)) {
       _applyLocation(data.substring(BleResponses.locPrefix.length));
       notifyListeners();
@@ -2244,6 +2335,7 @@ class BleService extends ChangeNotifier {
       case BleResponses.simpleAuthOkUnpaired:
         setOwnershipState(OwnershipState.unclaimed);
         unawaited(pushAlertPattern());
+        unawaited(pushMaxAllowance());
         unawaited(pushPhoneLocation());
         return true;
 
@@ -2252,6 +2344,7 @@ class BleService extends ChangeNotifier {
         setOwnershipState(OwnershipState.authenticated);
         _lastError = '';
         unawaited(pushAlertPattern());
+        unawaited(pushMaxAllowance());
         unawaited(pushPhoneLocation());
         return true;
 
@@ -2289,6 +2382,7 @@ class BleService extends ChangeNotifier {
       // here rather than at connect time because on a claimed device every
       // command before AUTH_OK is refused outright.
       unawaited(pushAlertPattern());
+      unawaited(pushMaxAllowance());
       // Same reason, and this is what stops the keyholder's location screen
       // being a dead end: it has no GPS of its own, so the only position it
       // will ever have is the one this phone hands it.
@@ -2745,6 +2839,9 @@ class BleService extends ChangeNotifier {
     // boundary that is now further away than the keyholder is.
     _maxAllowanceWarned = false;
     unawaited(_notifications?.cancelMaxAllowanceExceeded() ?? Future.value());
+    // Sent on as well as stored, so the number on the keyholder's own screen is
+    // the number the owner just chose. See BleCommands.setDistancePrefix.
+    unawaited(pushMaxAllowance());
     notifyListeners();
     await _settings?.setMaxAllowanceDistance(value);
   }
