@@ -43,9 +43,6 @@ class NetworkInfoService {
     return _publicIp;
   }
 
-  /// The last local address read, if any.
-  String? get cachedLocalIp => _localIp;
-
   /// The best address currently known without doing any work, public first.
   String? get cachedAddress => cachedPublicIp ?? _localIp;
 

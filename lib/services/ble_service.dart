@@ -62,9 +62,6 @@ class BleService extends ChangeNotifier {
     _ringer = ringer;
   }
 
-  /// The ringer, for the UI. Null until [attachRinger] has run.
-  PhoneRingerService? get phoneRinger => _ringer;
-
   /// Posts the "your keys are getting away from you" warning. Injected and
   /// nullable for the same reasons as [_ringer]: a protocol test should not have
   /// to stand up a platform notification channel.
@@ -658,9 +655,6 @@ class BleService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// True once a keyholder has been connected to at least once on this phone.
-  bool get hasKnownDevice => _knownDeviceId != null;
-
   int get batteryLevel => _batteryLevel ?? 0;
   bool get hasBatteryReading => _batteryLevel != null;
 
@@ -680,12 +674,6 @@ class BleService extends ChangeNotifier {
 
   double get estimatedDistance => _estimatedDistance ?? 0.0;
   bool get hasDistanceEstimate => _estimatedDistance != null;
-
-  /// True when the keyholder is further away than the configured threshold.
-  bool get isOutOfRange =>
-      _isConnected &&
-      _estimatedDistance != null &&
-      _estimatedDistance! > _alertDistanceThreshold;
 
   bool get isPinging => _isPinging;
   bool get isAlertActive => _isAlertActive;
@@ -757,9 +745,6 @@ class BleService extends ChangeNotifier {
   List<BleDevice> get filteredScannedDevices =>
       List.unmodifiable(_scannedDevices);
 
-  /// How many keyholders the current scan can see, for the Scan screen counter.
-  int get keyholderCount => _scannedDevices.where((d) => d.isKeyholder).length;
-
   // There was a `wifiStatusMessage` here, explaining to the owner what giving
   // the keyholder a Wi-Fi network would do for them. The keyholder is a
   // Bluetooth device now and nothing else, so there is nothing to explain.
@@ -803,7 +788,6 @@ class BleService extends ChangeNotifier {
 
   /// Auth-characteristic traffic, for the pairing service.
   Stream<String> get authFrames => _authFrames.stream;
-  BluetoothCharacteristic? get authCharacteristic => _authChar;
   BluetoothDevice? get connectedDevice => _connectedDevice;
 
   // ===========================================================================
@@ -1387,26 +1371,6 @@ class BleService extends ChangeNotifier {
     }
   }
 
-  /// A narrow scan that only surfaces FindMe hardware, for the pairing flow.
-  ///
-  /// The general scan above is intentionally unfiltered so the Scan tab can list
-  /// everything in the room; only one BLE scan can run at a time, so the two
-  /// cannot be combined.
-  Future<void> startKeyholderOnlyScan() async {
-    if (kIsWeb || !_hasBluetoothPermission || !isBluetoothOn) return;
-    try {
-      if (FlutterBluePlus.isScanningNow) await FlutterBluePlus.stopScan();
-      await FlutterBluePlus.startScan(
-        timeout: _scanTimeout,
-        withServices: [Guid(BleUuids.service)],
-        androidUsesFineLocation: false,
-      );
-    } catch (e) {
-      _lastError = 'Could not start scanning: $e';
-      notifyListeners();
-    }
-  }
-
   Future<void> stopActiveHardwareScan() async {
     if (kIsWeb) return;
     try {
@@ -1599,8 +1563,6 @@ class BleService extends ChangeNotifier {
 
   /// Current bond state of the connected device, or null when unknown.
   BluetoothBondState? get bondState => _bondState;
-
-  bool get isBonded => _bondState == BluetoothBondState.bonded;
 
   /// Starts OS-level pairing so the 6-digit code on the keyholder's OLED can be
   /// entered.
@@ -2693,24 +2655,6 @@ class BleService extends ChangeNotifier {
     await _handleDisconnected(logEvent: true, resumeHunting: false);
   }
 
-  Future<void> toggleDeviceConnection() async {
-    if (_isConnected) {
-      final id = _connectedDevice?.remoteId.str;
-      if (id != null) await disconnectDevice(id);
-      return;
-    }
-
-    _clearUserDisconnect();
-    final known = _knownDeviceId;
-    if (known != null && _radios.containsKey(known)) {
-      await connectDevice(known);
-    } else {
-      // Not in the current result set — go and look for it.
-      _autoConnectDone = false;
-      await startActiveHardwareScan();
-    }
-  }
-
   // ===========================================================================
   // History
   // ===========================================================================
@@ -2913,14 +2857,6 @@ class BleService extends ChangeNotifier {
     _darkModeEnabled = value;
     notifyListeners();
     await _settings?.setDarkModeEnabled(value);
-  }
-
-  Future<void> setDeviceName(String name) async {
-    _deviceName = name;
-    notifyListeners();
-    if (_deviceId.isNotEmpty) {
-      await _settings?.setLastDevice(_deviceId, name);
-    }
   }
 
   /// Recalibrates the distance model. Hold the keyholder at exactly one metre,

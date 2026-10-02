@@ -105,9 +105,6 @@ class PairingService extends ChangeNotifier {
   /// Human-readable explanation of [stage], safe to show directly.
   String get message => _message;
 
-  /// Seconds left on a keyholder lockout, or 0.
-  int get lockoutSecondsRemaining => _lockoutSecondsRemaining;
-
   /// Keyholders this phone holds a key for.
   List<PairedDevice> get ownedDevices => List.unmodifiable(_ownedDevices);
 
@@ -133,13 +130,6 @@ class PairingService extends ChangeNotifier {
     _ownedDevices = devices;
     notifyListeners();
   }
-
-  Future<bool> ownsConnectedDevice() async {
-    final id = _ble.connectedDevice?.remoteId.str;
-    if (id == null) return false;
-    return _identity.owns(id);
-  }
-
   // ===========================================================================
   // Claiming
   // ===========================================================================

@@ -67,8 +67,8 @@
  * for the GPS. With it disabled, the serial console and the GPS fight over the
  * same two pins and you get garbage on both.
  *
- * Libraries: U8g2 (by olikraus), TinyGPSPlus. BLE, Preferences, WiFi and
- * mbedTLS ship with the ESP32 core.
+ * Libraries: U8g2 (by olikraus), TinyGPSPlus. BLE, Preferences and mbedTLS
+ * ship with the ESP32 core.
  * =========================================================================== */
 
 #include <Wire.h>
@@ -82,12 +82,10 @@
 
 #include <Preferences.h>
 #include <TinyGPSPlus.h>
-#include <WiFi.h>
 
 #include <esp_random.h>
 #include <esp_gap_ble_api.h>
 #include <mbedtls/md.h>
-#include <mbedtls/base64.h>
 
 /* ===========================================================================
  * SECTION 1 — Pins and hardware constants
@@ -149,7 +147,9 @@
 #define SERVICE_UUID   "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHAR_DATA_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define CHAR_AUTH_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a9"
-#define CHAR_PROV_UUID "beb5483e-36e1-4688-b7f5-ea07361b26aa"
+/* A third characteristic, "...b26aa", carried Wi-Fi credentials. The UUID is
+ * recorded here and nowhere else so it is not reused for something new: a phone
+ * flashed against the old protocol would write a password to it. */
 
 /* Advertised name. One name in both ownership states, and short on purpose.
  *
@@ -178,7 +178,6 @@
 #define CMD_CLAIM      "CLAIM:"
 #define CMD_AUTH       "AUTH:"
 #define CMD_UNCLAIM    "UNCLAIM"
-#define CMD_WIFI_SET   "WIFI_SET:"
 /* PHONE_LOC:<lat>,<lng> — where the PHONE is. Every other position in this
  * protocol travels device -> phone; this one comes the other way, because this
  * board has no GPS module on most builds and its own location screen therefore
@@ -205,8 +204,6 @@
 #define RSP_CLAIM_DENIED     "CLAIM_DENIED"
 #define RSP_UNCLAIM_OK       "UNCLAIM_OK"
 #define RSP_NOT_AUTHED       "ERR_NOT_AUTHED"
-#define RSP_WIFI_OK          "WIFI_OK:"
-#define RSP_WIFI_FAIL        "WIFI_FAIL:"
 /* ALERT:<token> — the cadence this device is ACTUALLY set to. Sent on connect
  * and after every accepted ALERT_SET, so the app's Settings screen shows the
  * device's state rather than what some phone last asked for. Those two diverge
@@ -234,7 +231,6 @@
 #define BATTERY_INTERVAL_MS   30000UL   // per the handout
 #define BUTTON_DEBOUNCE_MS    50UL
 #define FACTORY_RESET_HOLD_MS 10000UL
-#define WIFI_CONNECT_TIMEOUT  15000UL
 
 /* ===========================================================================
  * SECTION 4 — Globals
@@ -251,7 +247,6 @@ Preferences prefs;
 BLEServer*         pServer   = nullptr;
 BLECharacteristic* pDataChar = nullptr;
 BLECharacteristic* pAuthChar = nullptr;
-BLECharacteristic* pProvChar = nullptr;
 BLEAdvertising*    pAdvertising = nullptr;
 
 // --- Ownership, persisted in NVS ---
@@ -377,10 +372,6 @@ bool     g_buttonDown      = false;
 uint32_t g_buttonDownAt    = 0;
 bool     g_resetCountdownShown = false;
 int      g_lastCountdownSecond = -1;
-
-// --- Wi-Fi (credentials arrive over BLE; see SECTION 11) ---
-String g_wifiSsid;
-String g_wifiPass;
 
 /* ===========================================================================
  * SECTION 5 — Display
@@ -647,9 +638,6 @@ void loadOwnership() {
       prefs.putBool("claimed", false);
     }
   }
-
-  g_wifiSsid = prefs.getString("wifi_ssid", "");
-  g_wifiPass = prefs.getString("wifi_pass", "");
 
   Serial.printf("Ownership: %s\n", g_claimed ? "CLAIMED" : "unclaimed");
 }
@@ -1229,116 +1217,32 @@ class AuthCharCallbacks : public BLECharacteristicCallbacks {
 };
 
 /* ===========================================================================
- * SECTION 11 — Wi-Fi provisioning
+ * SECTION 11 — (was Wi-Fi provisioning)
  *
- * Credentials arrive over the encrypted BLE link as
- * `WIFI_SET:<ssid base64>:<password base64>`. Base64 because a colon in a
- * password would otherwise split the frame in the wrong place — and passwords
- * containing colons are common.
+ * This section used to accept `WIFI_SET:<ssid base64>:<password base64>` on a
+ * third characteristic, join the owner's network as a station, and hold a
+ * placeholder for a Firebase upload path. All of it is gone, along with the
+ * characteristic, the stored credentials and the WiFi.h include.
  *
- * The phone never joins this device's Wi-Fi and this device never runs an access
- * point. It joins the user's existing network as a station, which is what it
- * needs for the Firebase upload path.
+ * It was removed because the product decided what it is. A key finder that also
+ * holds the owner's Wi-Fi password and publishes their movements to a cloud
+ * database is a much larger thing to secure than one that talks to a single
+ * paired phone over an encrypted BLE link and keeps nothing. The app no longer
+ * sends the frame (there is no provisioning UUID in lib/services/ble_protocol
+ * .dart any more), so the code here could only ever have been reached by
+ * something that was not this app.
+ *
+ * Two practical notes, kept because they are the reasons not to bring it back:
+ *   - Wi-Fi and BLE share one radio on the ESP32-C3. Coexistence roughly
+ *     doubles average current, and this board runs from a 150 mAh cell.
+ *   - Credentials that did not work must never be persisted, or the next boot
+ *     retries them forever and BLE-only operation looks like a fault. Getting
+ *     that right was most of what the removed function did.
+ *
+ * Positions still reach the phone, which is the thing that actually mattered:
+ * they travel over the data characteristic in SECTION 10, and the phone's own
+ * position travels the other way as `PHONE_LOC:`.
  * =========================================================================== */
-
-String base64Decode(const String& encoded) {
-  size_t outLen = 0;
-  const size_t bufferSize = encoded.length() + 1;
-  uint8_t* buffer = (uint8_t*)malloc(bufferSize);
-  if (!buffer) return "";
-
-  const int rc = mbedtls_base64_decode(buffer, bufferSize, &outLen,
-                                       (const uint8_t*)encoded.c_str(),
-                                       encoded.length());
-  String result;
-  if (rc == 0) {
-    buffer[outLen] = '\0';
-    result = String((char*)buffer);
-  }
-  free(buffer);
-  return result;
-}
-
-void handleWifiSet(const String& payload) {
-  const int separator = payload.indexOf(':');
-  if (separator < 0) {
-    notifyAuth(String(RSP_WIFI_FAIL) + "BAD_FORMAT");
-    return;
-  }
-
-  const String ssid = base64Decode(payload.substring(0, separator));
-  const String pass = base64Decode(payload.substring(separator + 1));
-
-  if (!ssid.length()) {
-    notifyAuth(String(RSP_WIFI_FAIL) + "BAD_SSID");
-    return;
-  }
-
-  showOnOLED("WIFI", "CONNECTING");
-  Serial.printf("Joining SSID: %s\n", ssid.c_str());
-
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid.c_str(), pass.c_str());
-
-  const uint32_t startedAt = millis();
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - startedAt < WIFI_CONNECT_TIMEOUT) {
-    delay(250);
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    // Do NOT persist credentials that did not work: on the next boot the device
-    // would retry them forever, and BLE-only operation would look like a fault.
-    WiFi.disconnect(true);
-    notifyAuth(String(RSP_WIFI_FAIL) + "NO_CONNECT");
-    showOnOLED("WIFI", "FAILED");
-    return;
-  }
-
-  g_wifiSsid = ssid;
-  g_wifiPass = pass;
-  prefs.putString("wifi_ssid", ssid);
-  prefs.putString("wifi_pass", pass);
-
-  const String ip = WiFi.localIP().toString();
-  notifyAuth(String(RSP_WIFI_OK) + ip);
-  showOnOLED("WIFI OK", ip.substring(ip.lastIndexOf('.') + 1));
-  Serial.printf("Wi-Fi connected: %s\n", ip.c_str());
-
-  /* TODO (Phase 4) — Firebase. With the station up, publish to
-   *   /keyholder/<deviceId>/last_location
-   *   /keyholder/<deviceId>/events
-   *   /keyholder/<deviceId>/disconnect_location
-   *   /keyholder/<deviceId>/button_event
-   * using Firebase_ESP_Client, authenticated with email/password. The paths are
-   * per-device rather than the handout's global /keyholder because two units
-   * would otherwise overwrite each other's location. Rules must require auth —
-   * an open database publishes the owner's movements to anyone with the URL,
-   * which would undo the point of this file. See docs/SECURITY_MODEL.md
-   *
-   * Note on power: Wi-Fi and BLE share one radio on the C3 and coexistence
-   * roughly doubles average current. On a 150 mAh cell, keep Wi-Fi off unless
-   * there is something to upload. */
-}
-
-class ProvCharCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic* characteristic) override {
-    String frame = characteristic->getValue().c_str();
-    frame.trim();
-
-    // Provisioning is owner-only. Otherwise a stranger could point the device at
-    // a network they control and intercept everything it uploads.
-    if (!g_sessionAuthed) {
-      notifyAuth(RSP_NOT_AUTHED);
-      Serial.println("Provisioning refused: not authenticated");
-      return;
-    }
-
-    if (frame.startsWith(CMD_WIFI_SET)) {
-      handleWifiSet(frame.substring(strlen(CMD_WIFI_SET)));
-    }
-  }
-};
 
 /* ===========================================================================
  * SECTION 12 — BLE setup
@@ -1411,10 +1315,6 @@ void setupBle() {
   pAuthChar->addDescriptor(new BLE2902());
   pAuthChar->setCallbacks(new AuthCharCallbacks());
 
-  pProvChar = service->createCharacteristic(
-      CHAR_PROV_UUID, BLECharacteristic::PROPERTY_WRITE);
-  pProvChar->setCallbacks(new ProvCharCallbacks());
-
   /* Every characteristic demands an encrypted, MITM-protected link. An unbonded
    * stranger cannot read or write any of them — the stack refuses before a
    * single byte reaches the code above. Accessing one triggers pairing, which is
@@ -1423,7 +1323,6 @@ void setupBle() {
       ESP_GATT_PERM_READ_ENC_MITM | ESP_GATT_PERM_WRITE_ENC_MITM;
   pDataChar->setAccessPermissions(securePermissions);
   pAuthChar->setAccessPermissions(securePermissions);
-  pProvChar->setAccessPermissions(securePermissions);
 
   service->start();
 
@@ -1517,10 +1416,6 @@ void factoryReset() {
   Serial.println("Factory reset");
   releaseOwnership();
 
-  prefs.remove("wifi_ssid");
-  prefs.remove("wifi_pass");
-  g_wifiSsid = "";
-  g_wifiPass = "";
 
   showOnOLED("FACTORY", "RESET", "UNCLAIMED");
   chirp(3, 150);

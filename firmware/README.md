@@ -55,8 +55,8 @@ Install from Library Manager:
 - **U8g2** by oliver (olikraus) — the display driver
 - **TinyGPSPlus** by Mikal Hart
 
-`BLEDevice`, `Preferences`, `WiFi` and mbedTLS ship with the ESP32 core — do not
-install separate versions.
+`BLEDevice`, `Preferences` and mbedTLS ship with the ESP32 core — do not install
+separate versions.
 
 ---
 
@@ -213,13 +213,15 @@ Dropping Upload Speed to 115200 helps on long or unshielded cables.
   removes the obvious identifier, but a fixed MAC still lets a determined
   observer follow the *owner*. Full mitigation needs resolvable private
   addresses. See `docs/SECURITY_MODEL.md`.
-- **Firebase is not wired up yet** (Phase 4). `WIFI_SET:` provisioning works and
-  the station joins the network; the upload calls are marked `TODO (Phase 4)` in
-  `handleWifiSet()` and `serviceButton()`.
-- **Wi-Fi and BLE share one radio** on the C3. Coexistence roughly doubles
-  average current draw, which on a 700 mAh cell is the difference between about
-  8 hours and about 3–4 hours. Keep Wi-Fi off unless there is something to
-  upload.
+- **There is no Wi-Fi and no cloud.** `WIFI_SET:` provisioning and the
+  placeholder Firebase upload path were both removed: see SECTION 11 of the
+  sketch, which is now a note explaining why. Everything the owner sees comes
+  over the BLE link to one paired phone, and the phone is what keeps the log.
+  The two reasons not to bring it back are that Wi-Fi and BLE share one radio on
+  the C3 — coexistence roughly doubles average current, which on a 700 mAh cell
+  is the difference between about 8 hours and about 3–4 hours — and that a key
+  finder holding the owner's Wi-Fi password and publishing their movements is a
+  far larger thing to secure than one that holds neither.
 - **Passkey display size.** Resolved, but worth knowing why it is the way it is.
   Six digits in `u8g2_font_10x20_tf` are 60 px on a 72 px panel, so there is a
   6 px margin either side and the `PAIR CODE` label sits above it in the small

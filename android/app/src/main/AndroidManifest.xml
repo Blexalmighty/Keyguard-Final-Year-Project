@@ -26,15 +26,13 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <!--
-        Location. Needed for three things, only one of them BLE-related: (1) the
+        Location. Needed for two things, only one of them BLE-related: (1) the
         phone's own GPS, which is what stamps a position on every connect,
         disconnect and ping — it replaced the keyholder's GPS module, which could
         only be read while a link was up and so was unreadable at the one moment
-        a position matters; (2) Android 11 and below gate BLE discovery behind
-        fine location; and (3) Wi-Fi access-point scanning requires it, for Wi-Fi
-        provisioning. Coarse is declared as well, both as the fallback when the
-        owner grants approximate location only and for API 28 and below, where
-        fine alone was not enough for Wi-Fi results.
+        a position matters; and (2) Android 11 and below gate BLE discovery
+        behind fine location. Coarse is declared as well, as the fallback when
+        the owner grants approximate location only.
     -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -60,17 +58,21 @@
         tools:targetApi="q" />
 
     <!--
-        Android 13+ replacement for location-gated Wi-Fi scanning. Also flagged
-        neverForLocation for the same reason as above.
-    -->
-    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
-        android:usesPermissionFlags="neverForLocation"
-        tools:targetApi="tiramisu" />
+        NEARBY_WIFI_DEVICES, ACCESS_WIFI_STATE and CHANGE_WIFI_STATE were
+        declared here for Wi-Fi provisioning — the flow that handed the
+        keyholder an SSID and password so it could reach Firebase. That flow is
+        gone and so are they. A permission the app no longer exercises is not
+        free: it is listed on the Play listing and in the system's permission
+        screen, and "this key finder wants to see the networks around you" is a
+        question the owner should not have to answer for a feature that does not
+        exist.
 
+        INTERNET and ACCESS_NETWORK_STATE stay. They are what the map tiles,
+        the reverse-geocoding lookup that turns a position into a place name,
+        and the public-address readout on the location card all need.
+    -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
     <!--
         Audio on this phone, for "press the button on the keyholder and my phone
@@ -175,9 +177,20 @@
             </intent-filter>
         </activity>
 
-        <meta-data
-            android:name="com.google.android.geo.API_KEY"
-            android:value="YOUR_GOOGLE_MAPS_API_KEY_HERE" />
+        <!--
+            There was a com.google.android.geo.API_KEY meta-data entry here,
+            carrying the literal string "YOUR_GOOGLE_MAPS_API_KEY_HERE". It did
+            nothing: there is no google_maps_flutter dependency to read it, so
+            the only thing it achieved was to suggest to anyone reading the
+            manifest that this build was one key away from having Google Maps,
+            which it is not and does not need to be.
+
+            The map is drawn from OpenStreetMap raster tiles (widgets/map_tiles
+            .dart) and place names come from Nominatim (services/geocoding_
+            service.dart). Neither needs a key, neither bills, and tapping the
+            map hands the point to whatever maps app the phone already has via
+            a geo: intent — see the <queries> block above.
+        -->
 
         <meta-data
             android:name="flutterEmbedding"

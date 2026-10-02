@@ -29,8 +29,6 @@ class AppColors {
 
   static const Color primary = Color(0xFF4234B3);
   static const Color primaryContainer = Color(0xFF5B4FCC);
-  static const Color indigoLight = Color(0xFFEEEDFE);
-  static const Color primaryFixedDim = Color(0xFFC5C0FF);
 
   static const Color background = Color(0xFFF9F9FE);
   static const Color surface = Color(0xFFF9F9FE);
@@ -47,19 +45,12 @@ class AppColors {
   static const Color onSurfaceVariant = Color(0xFF474553);
 
   static const Color tertiary = Color(0xFF00562A);
-  static const Color tertiaryFixedDim = Color(0xFF4AE183);
-  static const Color successLight = Color(0xFFE1F5EE);
 
-  static const Color errorRed = Color(0xFFE74C3C);
-  static const Color errorLight = Color(0xFFFCEBEB);
   static const Color errorContainer = Color(0xFFFFDAD6);
 
   static const Color warning = Color(0xFF8A5300);
-  static const Color warningLight = Color(0xFFFFECC7);
 
-  static const Color borderHairline = Color(0xFFE8E8E8);
   static const Color outlineVariant = Color(0xFFC8C4D6);
-  static const Color glassBg = Color(0xB3FFFFFF);
 }
 
 // =============================================================================
@@ -371,9 +362,6 @@ class AppMotion {
   /// Accelerating — for things leaving.
   static const Curve exit = Curves.easeInCubic;
 
-  /// Slight overshoot, for state changes worth noticing (connected, verified).
-  static const Curve emphasized = Curves.easeOutBack;
-
   static const Curve standard = Curves.easeInOutCubic;
 
   /// Per-item delay in a staggered list reveal. Kept small deliberately: a long
@@ -605,37 +593,6 @@ class AppDecorations {
           blurRadius: 14,
           offset: const Offset(0, 4),
         ),
-      ],
-    );
-  }
-
-  /// Retained so existing call sites keep compiling. New code should use [card].
-  static BoxDecoration cardDecoration({
-    Color backgroundColor = AppColors.surfaceContainerLowest,
-    Color borderColor = AppColors.borderHairline,
-    double borderRadius = 16.0,
-  }) {
-    return BoxDecoration(
-      color: backgroundColor,
-      borderRadius: BorderRadius.circular(borderRadius),
-      border: Border.all(color: borderColor, width: 1.0),
-      boxShadow: const [
-        BoxShadow(color: Color(0x0A000000), blurRadius: 12, offset: Offset(0, 3)),
-      ],
-    );
-  }
-
-  static BoxDecoration glassDecoration({
-    double borderRadius = 16.0,
-    Color borderColor = AppColors.borderHairline,
-    Color? backgroundColor,
-  }) {
-    return BoxDecoration(
-      color: backgroundColor ?? AppColors.glassBg,
-      borderRadius: BorderRadius.circular(borderRadius),
-      border: Border.all(color: borderColor, width: 1.0),
-      boxShadow: const [
-        BoxShadow(color: Color(0x08000000), blurRadius: 12, offset: Offset(0, 3)),
       ],
     );
   }

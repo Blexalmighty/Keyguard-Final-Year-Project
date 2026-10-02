@@ -178,19 +178,6 @@ class OwnerIdentity {
     }
   }
 
-  /// Wipes the owner id and every stored key.
-  ///
-  /// This does **not** release ownership on any keyholder — those devices stay
-  /// claimed and will refuse this phone afterwards, needing the physical
-  /// 10-second button reset. Only for a deliberate "forget everything" action.
-  Future<void> wipeEverything() async {
-    for (final id in await ownedDeviceIds()) {
-      await forget(id);
-    }
-    await _delete(_kOwnerId);
-    _ownerId = null;
-  }
-
   // ===========================================================================
   // Storage plumbing
   // ===========================================================================

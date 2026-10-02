@@ -29,9 +29,6 @@ class NotificationService {
   bool _ready = false;
   bool _permitted = false;
 
-  /// True once Android has agreed to show notifications from this app.
-  bool get permitted => _permitted;
-
   /// Notifications are Android-only here. iOS is not a target for this project
   /// (the BLE ownership flow depends on Android's pairing dialog), and pretending
   /// otherwise would mean shipping an untested code path.

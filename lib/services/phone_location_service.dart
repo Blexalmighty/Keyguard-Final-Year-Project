@@ -124,13 +124,8 @@ class PhoneLocationService {
   /// would cost battery to produce three nearly identical answers.
   Future<PhoneFix?>? _inFlight;
 
-  /// The most recent reading, or null if there has never been one.
-  PhoneFix? get lastFix => _lastFix;
-
   /// Why the last attempt produced nothing, or null if it succeeded.
   PhoneLocationProblem? get lastProblem => _lastProblem;
-
-  bool get hasFix => _lastFix != null;
 
   /// Last known answer to "may this app read a position while it is not on
   /// screen?". Null before it has been checked.
@@ -166,17 +161,6 @@ class PhoneLocationService {
       if (identical(_inFlight, request)) _inFlight = null;
     });
     return request;
-  }
-
-  /// A position for an event: the cached one if it is fresh, otherwise a new
-  /// reading.
-  ///
-  /// For callers that can afford to wait. The BLE event path deliberately cannot
-  /// — see [usableCachedFix].
-  Future<PhoneFix?> currentFix() async {
-    final cached = usableCachedFix;
-    if (cached != null) return cached;
-    return refresh();
   }
 
   Future<PhoneFix?> _fetch() async {

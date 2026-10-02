@@ -25,11 +25,13 @@ class BleUuids {
   /// Ownership handshake channel. write + notify.
   static const String authChar = 'beb5483e-36e1-4688-b7f5-ea07361b26a9';
 
-  // There was a third characteristic here, `provChar`, carrying Wi-Fi
-  // credentials to the keyholder. It is gone: the keyholder is a Bluetooth
-  // device and nothing else now, so the app never writes to it. The firmware
-  // still exposes the characteristic for older phones; leaving the UUID
-  // undeclared here is what stops this app from using it.
+  // There was a third characteristic here, `provChar` ("…b26aa"), carrying
+  // Wi-Fi credentials to the keyholder. Both sides are now rid of it: the app
+  // never wrote it after Wi-Fi provisioning was dropped, and the firmware no
+  // longer creates it (see SECTION 11 of the reference sketch). The UUID is
+  // named in this comment and nowhere else so it does not get reused for
+  // something new — a phone still running the old protocol would write a
+  // password to it.
 }
 
 /// Advertised device name.

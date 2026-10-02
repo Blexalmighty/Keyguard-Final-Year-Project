@@ -187,11 +187,6 @@ class SettingsStore {
     await _prefs.setString(_kLastDeviceName, name);
   }
 
-  Future<void> clearLastDevice() async {
-    await _prefs.remove(_kLastDeviceId);
-    await _prefs.remove(_kLastDeviceName);
-  }
-
   /// Whether the owner switched the link off themselves.
   ///
   /// Remembered across launches on purpose. Reconnecting on next launch to a
@@ -229,10 +224,6 @@ class SettingsStore {
     }
     await _prefs.setString('$_kNicknamePrefix$deviceId', trimmed);
   }
-
-  Future<void> clearNickname(String deviceId) =>
-      _prefs.remove('$_kNicknamePrefix$deviceId');
-
   // --- Proximity alert ---
 
   /// Warn once when the keyholder passes half the alert distance on its way out.
