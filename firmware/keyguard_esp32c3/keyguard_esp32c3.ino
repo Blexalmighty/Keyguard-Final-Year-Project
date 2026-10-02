@@ -99,7 +99,7 @@
  * hardware gives a dead display and a nonsense battery reading, which is
  * exactly what it did.
  *
- * If you rewire the board, change these — and docs/images/wiring_diagram.svg
+ * If you rewire the board, change these — and docs/images/circuit_diagram.svg
  * with them. The pin map is the one place the firmware makes a claim about the
  * physical world, so it is the one place that has to be checked against it. */
 #define PIN_LED        4
