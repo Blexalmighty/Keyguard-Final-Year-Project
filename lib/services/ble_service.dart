@@ -89,6 +89,13 @@ class BleService extends ChangeNotifier {
   static const int _maxHistoryEntries = 200;
 
   static const Duration _rssiPollInterval = Duration(seconds: 2);
+
+  /// Sampling interval during a calibration run — eight times faster than the
+  /// display poll, because the whole value of the measurement is in gathering
+  /// enough samples that multipath averages out before the owner's patience does.
+  static const Duration _calibrationSampleInterval =
+      Duration(milliseconds: 250);
+
   static const Duration _scanTimeout = Duration(seconds: 15);
 
   /// Pause between the end of one hunting scan and the start of the next.
@@ -573,6 +580,19 @@ class BleService extends ChangeNotifier {
 
   final RssiWindow _rssiWindow = RssiWindow();
 
+  /// The calibration measurement in progress, if any.
+  RssiCalibrator? _calibrator;
+
+  /// Set by [cancelCalibration] so the sampling loop can stop between reads
+  /// rather than being abandoned mid-GATT-operation.
+  bool _calibrationCancelled = false;
+
+  /// The last two completed measurements, newest in [_lastCalibrationSample].
+  /// Two are kept because two at different distances are what let
+  /// [ProximityModel.solveFromPair] recover the path loss exponent as well.
+  RssiCalibrationSample? _lastCalibrationSample;
+  RssiCalibrationSample? _previousCalibrationSample;
+
   // ---------------------------------------------------------------------------
   // History
   // ---------------------------------------------------------------------------
@@ -779,6 +799,33 @@ class BleService extends ChangeNotifier {
   bool get darkModeEnabled => _darkModeEnabled;
 
   ProximityModel get proximityModel => _proximity;
+
+  /// True while a calibration measurement is collecting samples.
+  bool get isCalibrating => _calibrator != null;
+
+  /// 0..1 across the sampling run, for the progress bar.
+  double get calibrationProgress => _calibrator?.progress ?? 0.0;
+
+  int get calibrationSampleCount => _calibrator?.sampleCount ?? 0;
+
+  /// The distance the measurement in progress was started at.
+  double? get calibrationMetres => _calibrator?.metres;
+
+  /// The most recent completed measurement, kept so the card can report what it
+  /// found rather than silently changing a number.
+  RssiCalibrationSample? get lastCalibrationSample => _lastCalibrationSample;
+
+  RssiCalibrationSample? get previousCalibrationSample =>
+      _previousCalibrationSample;
+
+  /// Whether the last two measurements are far enough apart to solve for the
+  /// path loss exponent as well as the reference level.
+  bool get canSolvePathLoss {
+    final a = _previousCalibrationSample;
+    final b = _lastCalibrationSample;
+    if (a == null || b == null) return false;
+    return ProximityModel.solveFromPair(a, b) != null;
+  }
 
   String get signalQuality {
     final rssi = _currentRssi;
@@ -2876,6 +2923,128 @@ class BleService extends ChangeNotifier {
     if (pathLossExponent != null) {
       await _settings?.setPathLossExponent(pathLossExponent);
     }
+  }
+
+  /// Measures the reference level automatically and applies it.
+  ///
+  /// The owner holds the phone [metres] away from the keyholder and this takes
+  /// [RssiCalibrator.targetSamples] raw readings over about six seconds, takes
+  /// the **median**, and converts it to a one-metre reference. The median is the
+  /// entire point: a single RSSI reading can be 15 dB from the truth because of
+  /// multipath, and 15 dB at n = 2.5 is a four-fold distance error, which is why
+  /// the manual "read the live dBm and set it" procedure was never reliable even
+  /// when the owner did hold a measured metre.
+  ///
+  /// Returns the measurement, or null if it was cancelled, the link dropped, or
+  /// too few readings survived — in all three cases the existing calibration is
+  /// left exactly as it was.
+  Future<RssiCalibrationSample?> calibrateAutomatically({
+    double metres = 1.0,
+  }) async {
+    final device = _connectedDevice;
+    if (device == null || !_isConnected || _calibrator != null) return null;
+
+    final cal = RssiCalibrator(metres: metres);
+    _calibrator = cal;
+    _calibrationCancelled = false;
+    notifyListeners();
+
+    /* Only one reader on the link at a time.
+     *
+     * The display poll is cancelled for the duration rather than left running
+     * alongside: two timers issuing readRssi() on the same GATT connection
+     * serialise behind each other, so the calibration would sample at whatever
+     * rate was left over. The samples are fed into _rssiWindow on the way past,
+     * which keeps the live dBm pill and the distance readout moving while the
+     * measurement runs. */
+    _rssiTimer?.cancel();
+    _rssiTimer = null;
+
+    try {
+      while (!cal.isComplete && !_calibrationCancelled && _isConnected) {
+        try {
+          final rssi = await device.readRssi();
+          cal.add(rssi);
+          _rssiWindow.add(rssi);
+          final smoothed = _rssiWindow.median;
+          if (smoothed != null) {
+            _currentRssi = smoothed;
+            _estimatedDistance = _proximity.distanceFor(smoothed);
+            _lastRssiUpdate = DateTime.now();
+          }
+        } catch (e) {
+          // A failed read is a sample that never arrives. The loop counts
+          // samples rather than elapsed time, so it simply takes longer.
+          debugPrint('BleService: calibration read failed: $e');
+        }
+        notifyListeners();
+        await Future<void>.delayed(_calibrationSampleInterval);
+      }
+    } finally {
+      _calibrator = null;
+      // Restore the display poll whatever happened, including on an early
+      // return — otherwise a cancelled calibration would leave the signal
+      // readout frozen for the rest of the connection.
+      if (_isConnected && _connectedDevice != null) {
+        _startRssiPolling(_connectedDevice!);
+      }
+      notifyListeners();
+    }
+
+    if (_calibrationCancelled) return null;
+
+    final sample = cal.finish();
+    if (sample == null) {
+      notifyListeners();
+      return null;
+    }
+
+    _previousCalibrationSample = _lastCalibrationSample;
+    _lastCalibrationSample = sample;
+    // Computed against the current exponent, before setProximityCalibration
+    // replaces the model.
+    await setProximityCalibration(txPower: _proximity.txPowerFrom(sample));
+    return sample;
+  }
+
+  /// Stops a measurement in progress without changing the calibration.
+  void cancelCalibration() {
+    if (_calibrator == null) return;
+    _calibrationCancelled = true;
+    notifyListeners();
+  }
+
+  /// Solves for the path loss exponent from the last two measurements and
+  /// applies both constants together.
+  ///
+  /// This is the refinement that fits the model to the room rather than only to
+  /// the board. It needs two measurements at genuinely different distances; the
+  /// guard lives in [ProximityModel.solveFromPair], which returns null rather
+  /// than a plausible-looking answer when the pair cannot support one.
+  Future<bool> applyPathLossFromPair() async {
+    final a = _previousCalibrationSample;
+    final b = _lastCalibrationSample;
+    if (a == null || b == null) return false;
+
+    final solved = ProximityModel.solveFromPair(a, b);
+    if (solved == null) return false;
+
+    await setProximityCalibration(
+      txPower: solved.txPower,
+      pathLossExponent: solved.pathLossExponent,
+    );
+    return true;
+  }
+
+  /// Returns both constants to their defaults, for when a calibration has made
+  /// the readout worse and the owner wants a known starting point back.
+  Future<void> resetProximityCalibration() async {
+    _lastCalibrationSample = null;
+    _previousCalibrationSample = null;
+    await setProximityCalibration(
+      txPower: ProximityModel.defaultTxPower,
+      pathLossExponent: ProximityModel.defaultPathLossExponent,
+    );
   }
 
   // ===========================================================================

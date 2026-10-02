@@ -12,6 +12,7 @@ import '../services/background_service.dart';
 import '../services/ble_service.dart';
 import '../services/pairing_service.dart';
 import '../services/phone_ringer_service.dart';
+import '../services/proximity_model.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_logo_tile.dart';
 import '../widgets/motion.dart';
@@ -1226,19 +1227,89 @@ class _ToneRow extends StatelessWidget {
 }
 
 /// Distance calibration for the log-distance path loss model.
+///
 /// Distance is derived from RSSI as `d = 10^((txPower − RSSI) / (10·n))`. Both
-/// parameters are radio- and environment-specific, so exposing them is what makes
-/// the readout defensible: hold the keyholder at exactly one metre, read the live
-/// dBm shown here, and set that as the reference.
-class _CalibrationCard extends StatelessWidget {
+/// parameters are radio- and environment-specific, which is why they are
+/// measurable here rather than hardcoded.
+///
+/// The card leads with the automatic measurement because that is the one that
+/// works. The manual sliders stay underneath, collapsed: they are the escape
+/// hatch for a reading that has gone wrong and the only way to set the exponent
+/// by hand, but asking an owner to hold a measured metre and match a jittering
+/// number was never a reasonable thing to put first.
+class _CalibrationCard extends StatefulWidget {
   const _CalibrationCard({required this.bleService});
 
   final BleService bleService;
 
   @override
+  State<_CalibrationCard> createState() => _CalibrationCardState();
+}
+
+class _CalibrationCardState extends State<_CalibrationCard> {
+  /// Distances offered. Not arbitrary: one metre is the model's own reference
+  /// point, half a metre is "held against it" which is the easiest to get right,
+  /// and three metres is far enough from the others to make the two-point
+  /// exponent solve possible (it needs a 2x ratio).
+  static const List<double> _options = <double>[0.5, 1.0, 3.0];
+
+  double _metres = 1.0;
+  bool _manualOpen = false;
+  String? _message;
+  bool _messageIsGood = false;
+
+  Future<void> _run() async {
+    setState(() => _message = null);
+    final sample =
+        await widget.bleService.calibrateAutomatically(metres: _metres);
+    if (!mounted) return;
+
+    setState(() {
+      if (sample == null) {
+        _messageIsGood = false;
+        _message = widget.bleService.isConnected
+            ? 'Not enough readings arrived. Calibration unchanged — try again '
+                'holding the phone still.'
+            : 'The keyholder disconnected during the measurement. Calibration '
+                'unchanged.';
+        return;
+      }
+      _messageIsGood = !sample.isNoisy;
+      final median = '${sample.medianDbm} dBm';
+      final spread = '${sample.spreadDbm} dB';
+      _message = sample.isNoisy
+          // Said rather than hidden. A 12 dB spread means the room is throwing
+          // the signal around, and the owner can do something about that —
+          // move away from the metal filing cabinet — in a way they cannot do
+          // about a number the app quietly distrusted.
+          ? 'Measured $median from ${sample.sampleCount} readings, but they '
+              'varied by $spread. Reflective surroundings — applied anyway, '
+              'though a repeat in a clearer spot will do better.'
+          : 'Measured $median from ${sample.sampleCount} readings, spread '
+              '$spread. Reference set to ${widget.bleService.proximityModel.txPower} dBm.';
+    });
+  }
+
+  Future<void> _refine() async {
+    final ok = await widget.bleService.applyPathLossFromPair();
+    if (!mounted) return;
+    setState(() {
+      _messageIsGood = ok;
+      _message = ok
+          ? 'Solved both constants from the two distances: reference '
+              '${widget.bleService.proximityModel.txPower} dBm, n = '
+              '${widget.bleService.proximityModel.pathLossExponent.toStringAsFixed(1)}.'
+          : 'Those two measurements disagree too much to solve from. '
+              'Calibration unchanged.';
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
+    final bleService = widget.bleService;
     final model = bleService.proximityModel;
+    final busy = bleService.isCalibrating;
 
     return _Card(
       child: Column(
@@ -1269,48 +1340,206 @@ class _CalibrationCard extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(
-            'Hold the keyholder 1 m away, then set the reference to the live '
-            'reading above.',
+            busy
+                ? 'Hold still. Taking readings and keeping the middle one.'
+                : 'Stand this far from the keyholder and tap Measure. The app '
+                    'takes a few seconds of readings and keeps the median, '
+                    'which throws away the reflections a single reading cannot.',
             style: AppTypography.bodyMd(color: p.muted),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
+
+          // ---- distance chooser ------------------------------------------
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final option in _options)
+                _RetentionChip(
+                  label: option == option.roundToDouble()
+                      ? '${option.toInt()} m'
+                      : '${option.toStringAsFixed(1)} m',
+                  selected: option == _metres,
+                  onTap: busy ? () {} : () => setState(() => _metres = option),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // ---- the measurement -------------------------------------------
+          if (busy) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                value: bleService.calibrationProgress,
+                minHeight: 6,
+                backgroundColor: p.surfaceAlt,
+                valueColor: AlwaysStoppedAnimation<Color>(p.primary),
+              ),
+            ),
+            const SizedBox(height: 7),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '${bleService.calibrationSampleCount} of '
+                  '${RssiCalibrator.targetSamples} readings',
+                  style: AppTypography.microLabel(color: p.muted),
+                ),
+                TextButton(
+                  onPressed: bleService.cancelCalibration,
+                  child: const Text('Cancel'),
+                ),
+              ],
+            ),
+          ] else
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                // Greyed out off-link rather than hidden, with the reason
+                // spelled out below: the measurement reads the radio, so there
+                // has to be a radio on the other end.
+                onPressed: bleService.isConnected ? _run : null,
+                icon: const Icon(Icons.straighten_rounded, size: 16),
+                label: Text(
+                  bleService.lastCalibrationSample == null
+                      ? 'Measure at ${_label(_metres)}'
+                      : 'Measure again at ${_label(_metres)}',
+                ),
+              ),
+            ),
+
+          if (!bleService.isConnected && !busy)
+            Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Text(
+                'Connect to the keyholder first — the measurement samples its '
+                'signal.',
+                style: AppTypography.microLabel(color: p.muted),
+              ),
+            ),
+
+          if (_message != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                _message!,
+                style: AppTypography.bodyMd(
+                    color: _messageIsGood ? p.success : p.warning),
+              ),
+            ),
+
+          // ---- the two-point refinement ----------------------------------
+          if (bleService.canSolvePathLoss && !busy)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _refine,
+                  icon: const Icon(Icons.functions_rounded, size: 16),
+                  label: const Text('Solve path loss from both distances'),
+                ),
+              ),
+            ),
+          if (!bleService.canSolvePathLoss &&
+              bleService.lastCalibrationSample != null &&
+              !busy)
+            Padding(
+              padding: const EdgeInsets.only(top: 7),
+              child: Text(
+                // The one piece of advice that unlocks the better calibration,
+                // offered at the only moment it is useful.
+                'Measure once more at a different distance and the app can work '
+                'out the path loss for this room too.',
+                style: AppTypography.microLabel(color: p.muted),
+              ),
+            ),
+
+          const SizedBox(height: 4),
+          Divider(color: p.border, height: 18),
+
+          // ---- current values, and manual override -----------------------
           _Row(
             label: 'Reference RSSI at 1 m',
             value: Text('${model.txPower} dBm',
                 style: AppTypography.metadataMono(color: p.onSurface)),
-          ),
-          Slider(
-            value: model.txPower.toDouble(),
-            min: -90,
-            max: -30,
-            divisions: 60,
-            label: '${model.txPower} dBm',
-            onChanged: (v) =>
-                bleService.setProximityCalibration(txPower: v.round()),
           ),
           _Row(
             label: 'Path loss exponent (n)',
             value: Text(model.pathLossExponent.toStringAsFixed(1),
                 style: AppTypography.metadataMono(color: p.onSurface)),
           ),
-          Slider(
-            value: model.pathLossExponent,
-            min: 1.6,
-            max: 4.0,
-            divisions: 24,
-            label: model.pathLossExponent.toStringAsFixed(1),
-            onChanged: (v) => bleService.setProximityCalibration(
-                pathLossExponent: double.parse(v.toStringAsFixed(1))),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => setState(() => _manualOpen = !_manualOpen),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text(_manualOpen ? 'Hide manual override' : 'Set manually'),
+            ),
           ),
-          Text(
-            '2.0 is free space; 2.5–3.5 suits indoors, where walls and people '
-            'absorb the signal.',
-            style: AppTypography.bodyMd(color: p.muted),
-          ),
+          if (_manualOpen) ...[
+            Slider(
+              value: model.txPower
+                  .toDouble()
+                  .clamp(ProximityModel.minTxPower.toDouble(),
+                      ProximityModel.maxTxPower.toDouble()),
+              min: ProximityModel.minTxPower.toDouble(),
+              max: ProximityModel.maxTxPower.toDouble(),
+              divisions: ProximityModel.maxTxPower - ProximityModel.minTxPower,
+              label: '${model.txPower} dBm',
+              onChanged: (v) =>
+                  bleService.setProximityCalibration(txPower: v.round()),
+            ),
+            Slider(
+              value: model.pathLossExponent.clamp(
+                  ProximityModel.minPathLossExponent,
+                  ProximityModel.maxPathLossExponent),
+              min: ProximityModel.minPathLossExponent,
+              max: ProximityModel.maxPathLossExponent,
+              divisions: 24,
+              label: model.pathLossExponent.toStringAsFixed(1),
+              onChanged: (v) => bleService.setProximityCalibration(
+                  pathLossExponent: double.parse(v.toStringAsFixed(1))),
+            ),
+            Text(
+              '2.0 is free space; 2.5–3.5 suits indoors, where walls and people '
+              'absorb the signal.',
+              style: AppTypography.bodyMd(color: p.muted),
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () {
+                  bleService.resetProximityCalibration();
+                  setState(() {
+                    _message = null;
+                    _manualOpen = false;
+                  });
+                },
+                style: TextButton.styleFrom(
+                  foregroundColor: p.danger,
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('Reset to defaults'),
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
+
+  static String _label(double metres) => metres == metres.roundToDouble()
+      ? '${metres.toInt()} m'
+      : '${metres.toStringAsFixed(1)} m';
 }
 
 // =============================================================================

@@ -44,7 +44,7 @@ limitations of what was built.
 | Models | 7 | 807 | 5.3 % |
 | Utilities and theme | 4 | ~1,100 | — |
 
-**Tests — 128 automated tests across 11 files**
+**Tests — 145 automated tests across 11 files**
 
 ### 4.2.3 Largest modules
 
@@ -345,13 +345,13 @@ reads a device that has gone quiet on them.
 
 | Level | Method |
 |---|---|
-| Unit | 128 automated tests, `flutter_test`, run in a plain Dart VM |
+| Unit | 145 automated tests, `flutter_test`, run in a plain Dart VM |
 | Static analysis | `flutter analyze` on every change |
 | Integration | Application against real hardware |
 | Field | Real use: pockets, buildings, reboots, swipe-aways, out-of-range |
 | Cross-boundary | One test parses the firmware source and compares it with the application's constants |
 
-### 4.5.2 Automated test suite — 128 tests
+### 4.5.2 Automated test suite — 145 tests
 
 | File | Lines | What it covers |
 |---|---|---|
@@ -359,7 +359,7 @@ reads a device that has gone quiet on them.
 | `widget_test.dart` | 208 | Application boot, `EventModel` serialisation round-trips, retention windows |
 | `phone_location_test.dart` | 199 | Permission ladder ordering, fix plausibility rejection |
 | `alert_pattern_test.dart` | 173 | Cadence tokens **parsed from the firmware on disk** |
-| `distance_test.dart` | 170 | Path-loss model, sentinel-RSSI rejection, 30 m ceiling |
+| `distance_test.dart` | 336 | Path-loss model, sentinel-RSSI rejection, 30 m ceiling |
 | `scan_list_visibility_test.dart` | 169 | Which radios are presented as keyholders |
 | `phone_alert_tone_test.dart` | 108 | Tone selection and persistence |
 | `scan_list_diff_test.dart` | 97 | List stability under rapid advertisement updates |
@@ -390,7 +390,7 @@ $ flutter analyze
 No issues found!
 
 $ flutter test
-All tests passed!   128 tests
+All tests passed!   145 tests
 ```
 
 One diagnostic line is printed during `widget_test.dart`:
@@ -509,7 +509,7 @@ measurement that was not performed.
 | Measure | Result |
 |---|---|
 | `flutter analyze` | No issues |
-| Automated tests | 128, all passing |
+| Automated tests | 145, all passing |
 | Dependency cycles | None — the graph is acyclic and one-directional |
 | Domain layer plugin dependencies | None, which is what makes it testable |
 
@@ -674,8 +674,9 @@ not a useful record.
 
 **Distance is an estimate, not a measurement.** RSSI varies by several decibels
 from a hand moving across the antenna, a pocket, or a doorway. The model is
-calibrated for one environment and is wrong in others; both constants are exposed
-in Settings for that reason.
+calibrated for one environment and is wrong in others; both constants are
+measurable from Settings for that reason, automatically from a median of raw RSSI
+samples and manually by slider.
 
 **The keyholder's screen shows where the *phone* was.** A consequence of there
 being no GPS receiver in the device. It is the right way round — "where are my
@@ -712,15 +713,20 @@ accepted by Google Play. It was left as it is because changing it breaks the
 upgrade path for every already-installed build, which is a decision for release
 time rather than for development.
 
-**Calibration is manual.** The owner holds the phone at one metre and taps a
-button. An automatic scheme was considered and is discussed in Chapter Five.
+**Calibration recovers the reference level automatically, but the path-loss
+exponent only from two measurements.** The owner states a distance, the
+application takes twenty-four raw readings over about six seconds and keeps the
+median, and the model's reference term is solved from it. The exponent — the
+larger of the two error sources — needs a second measurement at a different
+distance, which the owner has to choose to take; until they do, the default
+exponent stands. The scheme and the maths are in Chapter Five, §5.6.2.
 
 ---
 
 ## 4.10 Summary
 
 The system was implemented as designed: 15,306 lines of Dart across 42 files,
-firmware for the ESP32-C3, 128 automated tests all passing, and `flutter analyze`
+firmware for the ESP32-C3, 145 automated tests all passing, and `flutter analyze`
 reporting no issues. All seventeen functional requirements, all five privacy
 requirements and seven of eight non-functional requirements were met, with
 multi-day battery life only partly verified.

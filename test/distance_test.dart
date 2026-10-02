@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keyguard/services/proximity_model.dart';
 
@@ -165,6 +167,170 @@ void main() {
       w.clear();
       expect(w.isEmpty, isTrue);
       expect(w.median, isNull);
+    });
+  });
+
+  // ===========================================================================
+  // Automatic calibration
+  // ===========================================================================
+  //
+  // The assertions here are derived from the model equation, not from the
+  // implementation: `txPower = RSSI + 10*n*log10(d)` and, for a pair,
+  // `n = (rssiFar - rssiNear) / (10 * log10(dNear/dFar))`. A sign error or a
+  // misplaced factor of ten would fail them.
+
+  group('RssiCalibrator', () {
+    RssiCalibrator feed(List<int> samples, {double metres = 1.0}) {
+      final c = RssiCalibrator(metres: metres);
+      for (final s in samples) {
+        c.add(s);
+      }
+      return c;
+    }
+
+    test('refuses to finish below the minimum sample count', () {
+      final c = feed(List<int>.filled(RssiCalibrator.minimumSamples - 1, -60));
+      expect(c.hasEnough, isFalse);
+      expect(c.finish(), isNull);
+    });
+
+    test('takes the median, not the mean', () {
+      // Eleven readings at -60 and one wild multipath outlier. The mean is
+      // dragged to about -62; the median does not move at all. This is the
+      // entire justification for the scheme.
+      final c = feed(<int>[-60, -60, -60, -60, -60, -60, -60, -60, -60, -60, -60, -85]);
+      final sample = c.finish()!;
+      expect(sample.medianDbm, -60);
+      final mean = (-60 * 11 + -85) / 12;
+      expect(mean, lessThan(-61));
+    });
+
+    test('rejects the platform sentinels instead of averaging them in', () {
+      final c = feed(<int>[-60, -61, -59, -60, -60, -61, -59, -60, 0, 127, -200]);
+      final sample = c.finish()!;
+      expect(sample.sampleCount, 8);
+      expect(sample.medianDbm, closeTo(-60, 1));
+    });
+
+    test('reports the spread honestly and flags a noisy room', () {
+      final clean = feed(List<int>.filled(12, -60))..add(-62);
+      expect(clean.finish()!.isNoisy, isFalse);
+
+      final noisy = feed(<int>[-50, -52, -54, -56, -58, -60, -62, -64, -70, -72]);
+      final sample = noisy.finish()!;
+      expect(sample.spreadDbm, 22);
+      expect(sample.isNoisy, isTrue);
+    });
+
+    test('progress runs 0..1 and completes at the target', () {
+      final c = RssiCalibrator(metres: 1.0);
+      expect(c.progress, 0.0);
+      for (int i = 0; i < RssiCalibrator.targetSamples; i++) {
+        c.add(-60);
+      }
+      expect(c.progress, 1.0);
+      expect(c.isComplete, isTrue);
+      // Extra samples cannot push progress past 1.
+      c.add(-60);
+      expect(c.progress, 1.0);
+    });
+  });
+
+  group('txPowerFrom', () {
+    RssiCalibrationSample sampleAt(double metres, int median) =>
+        RssiCalibrationSample(
+            metres: metres, medianDbm: median, spreadDbm: 2, sampleCount: 24);
+
+    test('at one metre the reference is the measurement itself', () {
+      // log10(1) == 0, so the correction term vanishes. This is the manual
+      // procedure, which is what makes the automatic one a drop-in replacement.
+      expect(model.txPowerFrom(sampleAt(1.0, -64)), -64);
+    });
+
+    test('corrects a measurement taken farther away', () {
+      // n = 2.5, d = 3 m: txPower = -70 + 25*log10(3) = -70 + 11.9 = -58.1
+      expect(model.txPowerFrom(sampleAt(3.0, -70)), -58);
+    });
+
+    test('corrects a measurement taken closer than a metre', () {
+      // d = 0.5 m: txPower = -50 + 25*log10(0.5) = -50 - 7.5 = -57.5
+      expect(model.txPowerFrom(sampleAt(0.5, -50)), -58);
+    });
+
+    test('round-trips: the calibrated model reads back the stated distance', () {
+      for (final metres in <double>[0.5, 1.0, 3.0]) {
+        const measured = -67;
+        final calibrated = ProximityModel(
+          txPower: model.txPowerFrom(sampleAt(metres, measured)),
+          pathLossExponent: model.pathLossExponent,
+        );
+        // Within 10% — the rounding of txPower to a whole dBm is the only error.
+        expect(calibrated.distanceFor(measured)!, closeTo(metres, metres * 0.1));
+      }
+    });
+
+    test('clamps to the physical bounds rather than emitting nonsense', () {
+      expect(model.txPowerFrom(sampleAt(1.0, -120)), ProximityModel.minTxPower);
+      expect(model.txPowerFrom(sampleAt(1.0, -20)), ProximityModel.maxTxPower);
+    });
+  });
+
+  group('solveFromPair', () {
+    RssiCalibrationSample at(double metres, int median) => RssiCalibrationSample(
+        metres: metres, medianDbm: median, spreadDbm: 2, sampleCount: 24);
+
+    test('recovers the constants it was given', () {
+      // Synthesise two readings from a known model, then check the solver finds
+      // it again. n = 3.0, txPower = -62.
+      const truth = ProximityModel(txPower: -62, pathLossExponent: 3.0);
+      int rssiAt(double d) =>
+          (truth.txPower - 10 * truth.pathLossExponent * (log(d) / ln10))
+              .round();
+
+      final solved = ProximityModel.solveFromPair(
+          at(1.0, rssiAt(1.0)), at(4.0, rssiAt(4.0)))!;
+      expect(solved.pathLossExponent, closeTo(3.0, 0.1));
+      expect(solved.txPower, closeTo(-62, 1));
+    });
+
+    test('order of the pair does not matter', () {
+      final a = at(1.0, -60);
+      final b = at(4.0, -75);
+      final forward = ProximityModel.solveFromPair(a, b)!;
+      final backward = ProximityModel.solveFromPair(b, a)!;
+      expect(forward.txPower, backward.txPower);
+      expect(forward.pathLossExponent, backward.pathLossExponent);
+    });
+
+    test('refuses a pair taken too close together', () {
+      // 1 m and 1.5 m is under the 2x ratio: at any plausible exponent the
+      // difference is smaller than the spread of a single measurement.
+      expect(ProximityModel.solveFromPair(at(1.0, -60), at(1.5, -64)), isNull);
+    });
+
+    test('refuses a pair where the farther reading was stronger', () {
+      // Multipath can genuinely do this. The solved exponent would be negative,
+      // which is not a radio. Null means "keep the previous calibration".
+      expect(ProximityModel.solveFromPair(at(1.0, -70), at(4.0, -60)), isNull);
+    });
+
+    test('refuses an implausibly steep or shallow fit', () {
+      // 40 dB over a 4x ratio implies n = 6.6, beyond any real environment.
+      expect(ProximityModel.solveFromPair(at(1.0, -50), at(4.0, -90)), isNull);
+      // 2 dB over a 4x ratio implies n = 0.33, below free space.
+      expect(ProximityModel.solveFromPair(at(1.0, -60), at(4.0, -62)), isNull);
+    });
+
+    test('rejects a zero or negative distance', () {
+      expect(ProximityModel.solveFromPair(at(0.0, -60), at(4.0, -75)), isNull);
+    });
+
+    test('the solved model reads back both stated distances', () {
+      final near = at(1.0, -61);
+      final far = at(4.0, -79);
+      final solved = ProximityModel.solveFromPair(near, far)!;
+      expect(solved.distanceFor(near.medianDbm)!, closeTo(1.0, 0.15));
+      expect(solved.distanceFor(far.medianDbm)!, closeTo(4.0, 0.6));
     });
   });
 }

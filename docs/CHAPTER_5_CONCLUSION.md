@@ -44,7 +44,7 @@ third party holding a record of where the owner has been.
 |---|---|
 | Application | 15,306 lines of Dart, 42 files, Flutter, Android API 26+ |
 | Firmware | ESP32-C3, Arduino framework, no GPS, no Wi-Fi |
-| Tests | 128 automated, all passing; `flutter analyze` clean |
+| Tests | 145 automated, all passing; `flutter analyze` clean |
 | Protocol | One GATT service, 11 commands, 14 responses, two supported dialects |
 | Documentation | Architecture reference, security model, and this report |
 
@@ -259,8 +259,12 @@ frame for an address exists in either dialect of the protocol. The place name
 covers the actual need and is more useful on a 72 × 40 display than an address
 would be.
 
-**Calibration is manual.** The owner holds the phone at one metre and taps a
-button.
+**Calibration measures the reference level but cannot measure the environment
+from a single point.** The automatic measurement of §5.6.2 was implemented and
+recovers the reference level reliably, but the path-loss exponent can only be
+recovered from two measurements at different distances, which the owner has to
+choose to take. A single-point calibration therefore still carries the default
+exponent, and the default exponent is the larger of the two error sources.
 
 **The firmware is not compiled in continuous integration.**
 
@@ -281,10 +285,13 @@ every installed build — a release-time decision rather than a development one.
 | 3 | Add a firmware compile step to continuous integration | A test parses the sketch, which catches protocol drift but not a build break. |
 | 4 | Measure a full discharge | The only missing figure behind a battery-life claim. |
 
-### 5.6.2 Automatic calibration
+### 5.6.2 Automatic calibration — implemented
 
-The manual one-metre calibration asks the owner to hold the phone at a measured
-distance, which few will do accurately.
+The original manual calibration asked the owner to hold the phone at a measured
+one metre and then match a slider to a live, jittering dBm readout. It was
+unreliable for two independent reasons: few people hold a measured metre
+accurately, and a single instantaneous RSSI reading can be more than ten decibels
+from the true value because of multipath.
 
 The intuitive automatic approach — have the phone's own sensors measure one metre
 as the owner walks it — **should not be pursued**, and the reason is worth
@@ -295,17 +302,70 @@ measured; and accelerometer dead-reckoning integrates error quadratically, so a
 displacement estimate over one metre is dominated by drift. Each sensor's error
 exceeds the quantity it would be measuring.
 
-**The defensible automatic scheme is statistical rather than kinematic.** Ask the
-owner to hold the phone near the keyholder, collect RSSI samples for several
-seconds, and take the median. The median suppresses the multipath outliers that
-make any single reading unreliable, and the result is a `TxPower` figure for *this*
-board in *this* enclosure — which is what the constant actually describes. It does
-not require the distance to be measured by the phone at all; it requires only that
-the owner holds a roughly known distance for a few seconds, which people can do.
+**The defensible automatic scheme is statistical rather than kinematic**, and it
+is what was built. The owner states which of three distances they are standing at,
+and the application takes twenty-four raw RSSI readings over about six seconds and
+keeps the **median**. The median is the whole mechanism: it discards the multipath
+outliers that a mean carries into the answer in proportion to how wrong they are.
+Rearranging the model for its reference term,
 
-A further refinement: sample at two distances and solve for the path-loss exponent
-as well. That would adapt the model to the environment rather than only to the
-board, which is where the larger error currently sits.
+```
+  txPower = RSSI + 10 · n · log10(d)
+```
+
+converts the median at any stated distance into the one-metre reference the
+constant describes. At d = 1 m the logarithm is zero and the expression reduces to
+"the reference is whatever you measured" — the manual procedure exactly, with the
+human removed from the part humans are bad at. Admitting a distance argument at
+all is what makes the feature usable: nobody holds a measured metre, but most
+people can stand at a doorway they know is three metres off, and the logarithm
+corrects for it without approximation.
+
+The refinement of sampling at two distances was implemented as well. Subtracting
+the model at two distances eliminates the reference term and leaves the exponent
+alone:
+
+```
+  rssiA − rssiB = −10 · n · log10(dA / dB)
+    ⇒  n = (rssiB − rssiA) / (10 · log10(dA / dB))
+```
+
+Substituting back recovers `txPower`. This fits the model to the *room* as well as
+to the board, which is where the larger error sat; a corridor and a furnished
+office have genuinely different exponents and no single-point calibration can
+discover that. The application offers the solve only once two measurements exist
+at a ratio of at least 2×, because below that the difference between them is
+smaller than the spread of either one.
+
+Three properties of the implementation are worth recording.
+
+**It samples the raw radio, not the smoothed feed.** The display already publishes
+a rolling median of eight samples. Sampling *that* would be a median of medians:
+it would narrow the apparent spread and hide the very outliers the measurement
+exists to average away. The sampler reads `readRssi()` directly and the display
+poll is suspended for the duration, so only one reader is on the link.
+
+**It reports the spread and refuses bad fits.** The measurement returns the
+strongest-minus-weakest figure alongside the median, and the interface shows it.
+A spread above twelve decibels — roughly a three-fold distance error at n = 2.5 —
+is called out as reflective surroundings, which is something the owner can act on
+in a way they cannot act on a number the application quietly distrusted. The
+two-point solver returns nothing at all rather than a plausible-looking answer
+when the pair implies an exponent outside 1.6–4.0 or a reference outside
+−90…−30 dBm; both conditions mean the measurement was bad, not that the radio is
+unusual. Multipath can genuinely make the farther reading the stronger one, and
+the solver detects that case as a negative exponent and declines.
+
+**The manual sliders were kept, collapsed behind a disclosure.** They are the
+escape hatch when a measurement has gone wrong, and the only way to set the
+exponent by hand without taking two measurements. Leading with them was the
+mistake; removing them would have been a different one.
+
+Seventeen tests cover the arithmetic, all derived from the model equation rather
+than from the implementation, so a sign error or a misplaced factor of ten would
+fail them. The round-trip test is the useful one: calibrate from a synthetic
+reading at a stated distance, then ask the calibrated model for the distance of
+that same reading, and require the stated distance back.
 
 ### 5.6.3 Technical improvements
 

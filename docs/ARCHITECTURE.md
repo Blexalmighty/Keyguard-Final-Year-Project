@@ -10,7 +10,7 @@ absent, that is said rather than left for you to wonder about.
 | **Device** | FindMe — ESP32-C3 Super Mini with an on-board 0.42″ SSD1306 OLED |
 | **Link** | Bluetooth Low Energy, GATT. No Wi-Fi, no cloud, no account |
 | **Dart source** | 15,306 lines across 42 files in `lib/` |
-| **Tests** | 128, in 11 files under `test/` |
+| **Tests** | 145, in 11 files under `test/` |
 
 ---
 
@@ -138,7 +138,7 @@ graph LR
 ```
 
 Acyclic, and in one direction only: no service imports a screen, and no model
-imports a service. That is what makes the 128 tests possible without a running
+imports a service. That is what makes the 145 tests possible without a running
 app — `ProximityModel`, `EventModel`, `AlertPattern` and `ScanListDiff` are all
 pure Dart with no plugin surface.
 
@@ -627,7 +627,7 @@ arrives is also how a place name ends up stored as `AmphitheatreSET_DIST:50`.
 
 ---
 
-## 11. Test suite — 128 tests
+## 11. Test suite — 145 tests
 
 | File | Tests | Covers |
 |---|---|---|
@@ -635,7 +635,7 @@ arrives is also how a place name ends up stored as `AmphitheatreSET_DIST:50`.
 | `widget_test.dart` | 208 | App boot, `EventModel` round-trips, retention |
 | `phone_location_test.dart` | 199 | Permission ladder, fix plausibility |
 | `alert_pattern_test.dart` | 173 | Cadence table parsed **from the firmware on disk** |
-| `distance_test.dart` | 170 | Path-loss model, rejection of sentinel RSSI |
+| `distance_test.dart` | 336 | Path-loss model, rejection of sentinel RSSI |
 | `scan_list_visibility_test.dart` | 169 | Which radios are shown as keyholders |
 | `phone_alert_tone_test.dart` | 108 | Tone selection and persistence |
 | `scan_list_diff_test.dart` | 97 | List stability under the user's finger |

@@ -56,7 +56,7 @@ faults into the design.
 graph LR
     A["Requirement<br/>identified"] --> B["Design<br/>increment"]
     B --> C["Implement<br/>app + firmware"]
-    C --> D["Unit test<br/>128 automated"]
+    C --> D["Unit test<br/>145 automated"]
     D --> E["Field test<br/>on hardware"]
     E --> F{"Behaves as<br/>specified?"}
     F -->|no| G["Diagnose; revise<br/>the design"]
@@ -84,7 +84,7 @@ graph LR
 | Firmware libraries | `NimBLE`/`BLEDevice` (ESP32 BLE Arduino), `U8g2` for the OLED, `Preferences` for NVS |
 | Version control | Git |
 | Target platform | Android 8.0 (API 26) and above |
-| Test framework | `flutter_test` — 128 automated tests |
+| Test framework | `flutter_test` — 145 automated tests |
 
 ---
 
@@ -207,7 +207,7 @@ graph TB
 
 The dependency direction is strictly downward and acyclic: no service imports a
 screen, and no domain class imports a service. That is what makes the domain
-layer testable without a running application, and it is why 128 tests can run in
+layer testable without a running application, and it is why 145 tests can run in
 a plain Dart VM.
 
 ### 3.4.2 Why a single `BleService`
@@ -652,11 +652,47 @@ graph TB
     E -->|no| G["report d,<br/>labelled an estimate"]
 ```
 
-Both constants are exposed in Settings, because `TxPower` in particular is a
+Both constants are measurable from Settings, because `TxPower` in particular is a
 property of the individual board and its enclosure rather than of the model. The
 design treats the output as a *relative* indicator — warmer, colder — which is
 what finding an object in a room actually requires, and the interface says so
 rather than implying a survey-grade figure.
+
+**Calibration design.** The constants are measured statistically rather than
+entered by hand. The owner states which of three distances they are standing at,
+and the application takes twenty-four raw RSSI readings over about six seconds and
+keeps the median; rearranging the model for its reference term,
+$TxPower = RSSI + 10\,n \log_{10}(d)$, converts that median into the one-metre
+reference. The median rather than the mean, because multipath produces occasional
+readings more than ten decibels from the truth and a mean carries them into the
+answer in proportion to how wrong they are.
+
+```mermaid
+graph TB
+    A["Owner states a distance<br/>(0.5 m, 1 m or 3 m)"] --> B["Suspend the display poll —<br/>one reader on the link"]
+    B --> C["Read raw RSSI every 250 ms"]
+    C --> D{"24 samples?"}
+    D -->|no| C
+    D -->|yes| E["median, and<br/>spread = max − min"]
+    E --> F{"≥ 8 valid samples?"}
+    F -->|no| G["discard — keep the<br/>existing calibration"]
+    F -->|yes| H["TxPower = median + 10n·log₁₀(d),<br/>clamped to −90…−30 dBm"]
+    H --> I{"a second measurement<br/>at a ratio ≥ 2×?"}
+    I -->|no| J["apply TxPower only;<br/>default exponent stands"]
+    I -->|yes| K["n = (rssi_far − rssi_near) /<br/>(10·log₁₀(d_near/d_far))"]
+    K --> L{"1.6 ≤ n ≤ 4.0?"}
+    L -->|no| M["reject the pair —<br/>the measurement was bad"]
+    L -->|yes| N["apply both constants"]
+```
+
+Taking a distance argument rather than insisting on one metre is what makes the
+procedure usable: nobody holds a measured metre, but most people can stand at a
+doorway they know is three metres off, and the logarithm corrects for it exactly.
+Sampling two distances eliminates the reference term by subtraction and recovers
+the exponent as well, which fits the model to the room rather than only to the
+board. The sampler reads the radio directly rather than the smoothed display feed,
+because that feed is already a rolling median and a median of medians would hide
+the spread the measurement exists to report. Manual sliders remain as an override.
 
 ### 3.8.2 Maximum allowance versus proximity threshold
 
