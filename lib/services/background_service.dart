@@ -24,6 +24,14 @@
 /// all keep running, because nothing ever tore them down. [_KeepAliveHandler] is
 /// consequently almost empty, and that emptiness is the design, not an omission.
 ///
+/// There is exactly one exception, and it is the case the rule does not cover.
+/// After a reboot Android starts this service from its boot receiver, with no
+/// Activity and therefore **no main isolate** — so the reasoning above inverts:
+/// there is no other `BleService` to collide with, and an empty handler would
+/// mean a phone that restarted overnight simply stopped watching. The handler
+/// re-arms the connection itself in that one case. See
+/// `_KeepAliveHandler._reconnectAfterSystemStart`.
+///
 /// # Platform reality
 ///
 /// Android is where this works. iOS has no equivalent — an app there is
@@ -35,9 +43,12 @@
 library;
 
 import 'dart:io' show Platform;
+import 'dart:ui' show DartPluginRegistrant;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Entry point for the service's isolate.
 ///
@@ -49,17 +60,96 @@ void startBackgroundCallback() {
   FlutterForegroundTask.setTaskHandler(_KeepAliveHandler());
 }
 
-/// Does nothing, on purpose.
+/// Does almost nothing, on purpose — with one exception, after a reboot.
 ///
-/// The service's value is the process it keeps alive, not the code it runs. The
-/// event action is [ForegroundTaskEventAction.nothing], so `onRepeatEvent`
-/// never fires and this isolate costs one thread sitting idle. Putting BLE work
-/// here would mean a second [BleService] on the other side of an isolate
-/// boundary, which is the bug this design avoids.
+/// While the app has been launched, the service's value is the process it keeps
+/// alive, not the code it runs: `onRepeatEvent` never fires, the main isolate
+/// still holds the one [BleService], and this isolate costs a thread sitting
+/// idle. Putting routine BLE work here would mean a second [BleService] on the
+/// other side of an isolate boundary, which is the bug this design avoids.
+///
+/// The exception is a start that came from the *system* rather than from the
+/// app — a reboot, or an app update. There is no Activity in that case and so
+/// **no main isolate at all**: nothing has constructed a [BleService], nothing
+/// is scanning, and an owner who restarted their phone overnight would find the
+/// keyholder unwatched until they next opened the app. Since there is no main
+/// isolate to collide with, this one can safely re-establish the link itself.
+/// See [_reconnectAfterSystemStart].
 class _KeepAliveHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     debugPrint('BackgroundService: process held open (${starter.name})');
+
+    // Started by the app: the main isolate owns the radio and is already
+    // connecting. Touching BLE from here would be the two-instance bug.
+    if (starter == TaskStarter.developer) return;
+
+    await _reconnectAfterSystemStart();
+  }
+
+  /// Re-establishes the keyholder link with no UI and no main isolate.
+  ///
+  /// Deliberately not a [BleService]: this makes three plugin calls and then
+  /// gets out of the way. The moment the owner opens the app, the main isolate
+  /// constructs the real service and becomes the single owner of the adapter —
+  /// so anything stateful built here would have to be torn down again, and the
+  /// window in which both exist is exactly where a two-instance bug would live.
+  ///
+  /// `autoConnect: true` is what makes this work at boot specifically. A reboot
+  /// is the one moment the keyholder is least likely to be in range — the phone
+  /// may be charging in another room — so a scan would find nothing and give
+  /// up. With autoConnect the request is handed to the Android Bluetooth stack,
+  /// which holds it open and completes the connection whenever the keyholder
+  /// next appears, at no cost in app-side battery. It is also why no scan is
+  /// started here: the stack does the waiting.
+  Future<void> _reconnectAfterSystemStart() async {
+    if (!BackgroundService.isSupported) return;
+
+    // This isolate was spawned by the engine, not by the app, so the plugin
+    // registrant has not run. Without this, every plugin call below throws
+    // MissingPluginException.
+    DartPluginRegistrant.ensureInitialized();
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // The owner's own Disconnect is a decision, not a fault to recover from,
+      // and it has to outlive a reboot to mean anything. This flag is the whole
+      // reason the reconnect is conditional: everything else here is automatic.
+      if (prefs.getBool('user_disconnected') ?? false) {
+        debugPrint('BackgroundService: boot reconnect skipped — owner '
+            'disconnected and has not reconnected since');
+        return;
+      }
+
+      // Nothing has ever been paired, so there is nothing to go back to.
+      final deviceId = prefs.getString('last_device_id');
+      if (deviceId == null || deviceId.isEmpty) return;
+
+      // The adapter comes up some seconds after the rest of the phone. Waiting
+      // for it rather than reading it once is the difference between
+      // reconnecting at boot and reconnecting never.
+      if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+        await FlutterBluePlus.adapterState
+            .where((s) => s == BluetoothAdapterState.on)
+            .first
+            .timeout(const Duration(seconds: 30));
+      }
+
+      // mtu must be null alongside autoConnect — flutter_blue_plus asserts on
+      // it, because the MTU exchange cannot be scheduled for a connection that
+      // has not happened yet. BleService raises the MTU once the app is open.
+      await BluetoothDevice.fromId(deviceId).connect(
+        autoConnect: true,
+        mtu: null,
+      );
+      debugPrint('BackgroundService: boot reconnect armed for $deviceId');
+    } catch (e) {
+      // A reboot is not a moment to surface anything to anybody: there is no UI
+      // to surface it to. The owner opening the app starts a normal scan, which
+      // is the recovery path.
+      debugPrint('BackgroundService: boot reconnect failed — $e');
+    }
   }
 
   @override
