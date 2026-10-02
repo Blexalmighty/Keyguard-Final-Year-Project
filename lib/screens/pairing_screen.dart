@@ -40,7 +40,7 @@ class PairingScreen extends StatelessWidget {
       // The app bar takes its colours from `appBarTheme`, which is palette-driven
       // in both brightnesses — the `isDark ? … : …` pairs this screen used to
       // carry were re-deriving what the theme already knows.
-      appBar: AppBar(title: const Text('Pair keyholder')),
+      appBar: AppBar(title: const Text('Pair device')),
       body: Consumer2<BleService, PairingService>(
         builder: (context, bleService, pairing, _) {
           return SingleChildScrollView(
@@ -81,7 +81,7 @@ class PairingScreen extends StatelessWidget {
       if (bleService.isConnecting) {
         return _Step(
           title: 'Connecting',
-          detail: 'Opening a link to the keyholder.',
+          detail: 'Opening a link to the device.',
           icon: Icons.bluetooth_searching_rounded,
           fg: p.primary,
           bg: p.primarySoft,
@@ -90,7 +90,7 @@ class PairingScreen extends StatelessWidget {
       }
       return _Step(
         title: 'Not connected',
-        detail: 'Connect to the keyholder to find out whether it already has an '
+        detail: 'Connect to the device to find out whether it already has an '
             'owner. Keep it within a metre or so while you pair.',
         icon: Icons.bluetooth_disabled_rounded,
         fg: p.muted,
@@ -102,7 +102,7 @@ class PairingScreen extends StatelessWidget {
       case PairingStage.awaitingButtonHold:
         return _Step(
           title: 'Hold the button',
-          detail: 'This keyholder has no owner yet. Press and hold the button '
+          detail: 'This device has no owner yet. Press and hold the button '
               'on the device, then tap Claim while still holding it. The '
               'firmware refuses a claim from anyone who is not physically '
               'holding the device — that is what stops a stranger claiming it '
@@ -133,7 +133,7 @@ class PairingScreen extends StatelessWidget {
 
       case PairingStage.claimed:
         return _Step(
-          title: 'This keyholder is yours',
+          title: 'This device is yours',
           detail: pairing.message,
           icon: Icons.verified_user_rounded,
           fg: p.success,
@@ -161,7 +161,7 @@ class PairingScreen extends StatelessWidget {
 
       case PairingStage.authFailed:
         return _Step(
-          title: 'Refused by the keyholder',
+          title: 'Refused by the device',
           detail: pairing.message,
           icon: Icons.lock_rounded,
           fg: p.danger,
@@ -170,7 +170,7 @@ class PairingScreen extends StatelessWidget {
 
       case PairingStage.lockedOut:
         return _Step(
-          title: 'Keyholder locked',
+          title: 'Device locked',
           detail: pairing.message,
           icon: Icons.timer_off_rounded,
           fg: p.danger,
@@ -352,7 +352,7 @@ class _Actions extends StatelessWidget {
     if (pairing.canClaim) {
       children.add(FilledButton(
         onPressed: pairing.isBusy ? null : () => _claim(context),
-        child: const Text('Claim this keyholder'),
+        child: const Text('Claim this device'),
       ));
     }
 
@@ -420,7 +420,7 @@ class _Actions extends StatelessWidget {
           title: Text('Pair during the claim?',
               style: AppTypography.headlineMd(color: p.onSurface)),
           content: Text(
-            'The keyholder refuses every unencrypted request, so your phone '
+            'The device refuses every unencrypted request, so your phone '
             'will still ask for the six-digit code — it will just ask in the '
             'middle of the claim.\n\n'
             'That means holding the button on the device with one hand while '

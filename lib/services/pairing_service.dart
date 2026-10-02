@@ -143,7 +143,7 @@ class PairingService extends ChangeNotifier {
   Future<bool> claimConnectedDevice() async {
     final device = _ble.connectedDevice;
     if (device == null) {
-      _fail('Connect to the keyholder before claiming it.');
+      _fail('Connect to the device before claiming it.');
       return false;
     }
 
@@ -158,7 +158,7 @@ class PairingService extends ChangeNotifier {
       return false;
     }
 
-    _set(PairingStage.claiming, 'Claiming this keyholder — keep the button '
+    _set(PairingStage.claiming, 'Claiming this device — keep the button '
         'held down.');
 
     final ownerIdHex = await _identity.ownerIdHex();
@@ -168,7 +168,7 @@ class PairingService extends ChangeNotifier {
     if (!sent) {
       _fail(_ble.lastError.isNotEmpty
           ? _ble.lastError
-          : 'Could not send the claim to the keyholder.');
+          : 'Could not send the claim to the device.');
       return false;
     }
     return true;
@@ -182,11 +182,11 @@ class PairingService extends ChangeNotifier {
   Future<bool> releaseOwnership() async {
     final device = _ble.connectedDevice;
     if (device == null) {
-      _fail('Connect to the keyholder before releasing it.');
+      _fail('Connect to the device before releasing it.');
       return false;
     }
     if (!isAuthenticated) {
-      _fail('Only the verified owner can release this keyholder.');
+      _fail('Only the verified owner can release this device.');
       return false;
     }
 
@@ -209,7 +209,7 @@ class PairingService extends ChangeNotifier {
     await _identity.forget(deviceId);
     await refreshOwnedDevices();
     _set(PairingStage.released,
-        'This phone has forgotten that keyholder. The device itself still '
+        'This phone has forgotten that device. The unit itself still '
         'needs its button held for 10 seconds if it was never released.');
   }
 
@@ -227,7 +227,7 @@ class PairingService extends ChangeNotifier {
       _ble.setOwnershipState(OwnershipState.unclaimed);
       _set(
         PairingStage.awaitingButtonHold,
-        'This keyholder has no owner yet. Hold the button on the device, then '
+        'This device has no owner yet. Hold its button down, then '
         'tap Claim.',
       );
       return;
@@ -244,7 +244,7 @@ class PairingService extends ChangeNotifier {
       _ble.setOwnershipState(OwnershipState.authenticated);
       _ble.logSecurityEvent(EventType.connected);
       _set(PairingStage.authenticated,
-          'Ownership verified. This keyholder is yours.');
+          'Ownership verified. This device is yours.');
       return;
     }
 
@@ -257,7 +257,7 @@ class PairingService extends ChangeNotifier {
       _ble.logSecurityEvent(EventType.intruderBlocked);
       _set(
         PairingStage.authFailed,
-        'This keyholder refused this phone. It belongs to another owner, or it '
+        'This device refused this phone. It belongs to another owner, or it '
         'was reset and needs claiming again.',
       );
       return;
@@ -281,7 +281,7 @@ class PairingService extends ChangeNotifier {
     if (frame == BleResponses.claimDenied) {
       _set(
         PairingStage.claimDenied,
-        'The keyholder refused the claim. Hold its button down *before* tapping '
+        'The device refused the claim. Hold its button down *before* tapping '
         'Claim and keep holding until it confirms. If it already has an owner, '
         'they must release it first.',
       );
@@ -297,7 +297,7 @@ class PairingService extends ChangeNotifier {
       _ble.logSecurityEvent(EventType.ownershipReleased);
       _set(
         PairingStage.released,
-        'Ownership released. Anyone can now claim this keyholder, so keep hold '
+        'Ownership released. Anyone can now claim this device, so keep hold '
         'of it until you have paired it again.',
       );
       return;
@@ -316,7 +316,7 @@ class PairingService extends ChangeNotifier {
       // A malformed challenge means the link is corrupt or the firmware is a
       // different version. Answering it with garbage would burn one of the
       // three attempts before lockout, so say nothing.
-      _fail('The keyholder sent a challenge this app could not read. Check '
+      _fail('The device sent a challenge this app could not read. Check '
           'that the firmware and app versions match.');
       return;
     }
@@ -337,7 +337,7 @@ class PairingService extends ChangeNotifier {
       _ble.setOwnershipState(OwnershipState.claimedByOther);
       _set(
         PairingStage.authFailed,
-        'This keyholder already has an owner, and it is not this phone. Its '
+        'This device already has an owner, and it is not this phone. Its '
         'owner must release it before you can pair.',
       );
       return;
@@ -354,7 +354,7 @@ class PairingService extends ChangeNotifier {
       '${OwnerIdentity.toHex(mac)}',
     );
     if (!sent) {
-      _fail('Could not answer the keyholder\'s challenge in time.');
+      _fail('Could not answer the device\'s challenge in time.');
     }
   }
 
@@ -373,7 +373,7 @@ class PairingService extends ChangeNotifier {
     if (!stored) {
       // storeKey rejects a key of the wrong length. The usual cause is a small
       // ATT MTU truncating the frame, which is why it is named here.
-      _fail('The keyholder sent an ownership key this phone could not store — '
+      _fail('The device sent an ownership key this phone could not store — '
           'it arrived incomplete. Disconnect, reconnect and claim again. '
           '(Negotiated MTU: ${_ble.negotiatedMtu} bytes.)');
       return;
@@ -385,7 +385,7 @@ class PairingService extends ChangeNotifier {
     _ble.logSecurityEvent(EventType.ownershipClaimed);
     _set(
       PairingStage.claimed,
-      'This keyholder is now yours. While you are connected it stops '
+      'This device is now yours. While you are connected it stops '
       'advertising, so no other phone can even see it — and once you '
       'disconnect it will refuse anyone who cannot prove ownership.',
     );
@@ -406,7 +406,7 @@ class PairingService extends ChangeNotifier {
         timer.cancel();
         _lockoutSecondsRemaining = 0;
         _set(PairingStage.idle,
-            'The keyholder is accepting connections again.');
+            'The device is accepting connections again.');
         return;
       }
       _message = _lockoutMessage();
@@ -415,7 +415,7 @@ class PairingService extends ChangeNotifier {
   }
 
   String _lockoutMessage() =>
-      'This keyholder has locked itself for $_lockoutSecondsRemaining more '
+      'This device has locked itself for $_lockoutSecondsRemaining more '
       'seconds after repeated failed attempts.';
 
   // ===========================================================================

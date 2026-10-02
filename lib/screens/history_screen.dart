@@ -271,7 +271,7 @@ class _EmptyState extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            'Connect to your keyholder and everything it does — pings, '
+            'Connect to your device and everything it does — pings, '
             'disconnects, blocked attempts — is listed here.',
             textAlign: TextAlign.center,
             style: AppTypography.bodyMd(color: p.muted),

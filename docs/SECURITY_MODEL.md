@@ -152,7 +152,7 @@ Two services are contacted, both read-only and both optional:
 
 | Service | Sees | Does not see |
 |---|---|---|
-| OpenStreetMap tiles | Which map tiles, hence roughly where | Who, or that a tracker is involved |
+| Map tiles (Esri, OpenStreetMap) | Which map tiles, hence roughly where | Who, or that a tracker is involved |
 | Nominatim | A coordinate pair to name | Device identity, owner id, any key |
 
 Neither is sent a device identifier, an owner id, or any key material. Both

@@ -130,7 +130,7 @@ class ScanScreen extends StatelessWidget {
         AppSwap(
           child: Text(
             bleService.isScanning
-                ? 'Looking for your keyholder…'
+                ? 'Looking for your device…'
                 : 'Scanning paused',
             key: ValueKey<bool>(bleService.isScanning),
             style: AppTypography.headlineMd(color: p.onSurface),
@@ -187,7 +187,7 @@ class ScanScreen extends StatelessWidget {
         padding: const EdgeInsets.only(bottom: 16),
         child: _InfoBanner(
           icon: Icons.bluetooth_disabled,
-          message: 'Bluetooth is off. Turn it on to find your keyholder.',
+          message: 'Bluetooth is off. Turn it on to find your device.',
           fg: p.danger,
           bg: p.dangerSoft,
         ),
@@ -327,7 +327,7 @@ class _PermissionBanner extends StatelessWidget {
               // Location is not named here: the manifest declares BLUETOOTH_SCAN
               // with neverForLocation, so on Android 12+ this app asks for no
               // location permission at all.
-              'Bluetooth permission is required to scan for your keyholder.',
+              'Bluetooth permission is required to scan for your device.',
               style: AppTypography.bodyMd(color: p.danger),
             ),
           ),
@@ -425,7 +425,7 @@ class _EmptyResults extends StatelessWidget {
     } else if (!bleService.isBluetoothOn) {
       message = 'Bluetooth is off, so nothing can be found.';
     } else if (bleService.isScanning) {
-      message = 'Scanning… nothing in range yet. Keep the keyholder within a '
+      message = 'Scanning… nothing in range yet. Keep the device within a '
           'few metres of the phone.';
     } else {
       message = 'Tap the dial to scan for nearby devices.';

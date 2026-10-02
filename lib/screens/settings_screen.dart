@@ -141,7 +141,7 @@ class _Header extends StatelessWidget {
       padding: const EdgeInsets.only(top: 6, bottom: 2),
       child: Text(
         'Device information, proximity tuning, and the controls that decide who '
-        'may command your keyholder.',
+        'may command your device.',
         style: AppTypography.bodyMd(color: p.onSurfaceVariant),
       ),
     );
@@ -440,9 +440,9 @@ class _DeviceSetupCard extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   connected
-                      ? 'Name this keyholder. The name stays on your phone — the '
+                      ? 'Name this device. The name stays on your phone — the '
                           'device keeps advertising as FindMe.'
-                      : 'Connect to your keyholder to give it a name.',
+                      : 'Connect to your device to give it a name.',
                   style: AppTypography.bodyMd(color: p.muted),
                 ),
               ],
@@ -465,7 +465,7 @@ class _DeviceSetupCard extends StatelessWidget {
     final name = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Name this keyholder'),
+        title: const Text('Name this device'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -532,7 +532,7 @@ class _ThresholdCard extends StatelessWidget {
             ],
           ),
           Text(
-            'How far your keyholder may drift before your phone notifies you. '
+            'How far your device may drift before your phone notifies you. '
             'You also get a quieter heads-up at half this distance. Neither '
             'sounds the buzzer.',
             style: AppTypography.bodyMd(color: p.muted),
@@ -563,11 +563,11 @@ class _ThresholdCard extends StatelessWidget {
           ),
           Text(
             bleService.maxAllowanceActive
-                ? 'The distance your keyholder should never pass. Crossing it '
+                ? 'The distance your device should never pass. Crossing it '
                     'sounds the buzzer on the device — it keeps sounding until '
                     'you tap Stop — and saves where it was.'
                 : 'Set this further out than the threshold above and the buzzer '
-                    'on the device sounds when your keyholder goes past it.',
+                    'on it sounds when your device goes past it.',
             style: AppTypography.bodyMd(color: p.muted),
           ),
           Slider(
@@ -595,7 +595,7 @@ class _ThresholdCard extends StatelessWidget {
           _Toggle(
             icon: Icons.notifications_active_outlined,
             title: 'Warn at half distance',
-            subtitle: 'Ask to send a phone notification when the keyholder '
+            subtitle: 'Ask to send a phone notification when the device '
                 'reaches half the threshold above.',
             value: bleService.proximityWarningEnabled,
             onChanged: (v) => bleService.setProximityWarningEnabled(v),
@@ -674,7 +674,7 @@ class _AlertPatternCardState extends State<_AlertPatternCard> {
                         style: AppTypography.bodyLg(color: p.onSurface)),
                     const SizedBox(height: 2),
                     Text(
-                      'How the keyholder beeps when you tap Ring. Its buzzer has '
+                      'How the device beeps when you tap Ring. Its buzzer has '
                       'one fixed pitch, so what changes is the rhythm.',
                       style: AppTypography.bodyMd(color: p.muted),
                     ),
@@ -702,9 +702,9 @@ class _AlertPatternCardState extends State<_AlertPatternCard> {
           // chirp, which sounds with no phone attached.
           Text(
             connected
-                ? 'Saved on the keyholder itself, so it applies even when your '
+                ? 'Saved on the device itself, so it applies even when your '
                     'phone is not nearby.'
-                : 'Saved now and sent to the keyholder the next time you '
+                : 'Saved now and sent to the device the next time you '
                     'connect. Connect to hear a preview.',
             style: AppTypography.metadataMono(color: p.muted),
           ),
@@ -808,7 +808,7 @@ class _PatternRow extends StatelessWidget {
                         onPressed: connected ? onPreview : null,
                         padding: EdgeInsets.zero,
                         tooltip: connected
-                            ? 'Ring the keyholder with this pattern'
+                            ? 'Ring the device with this pattern'
                             : 'Connect to preview',
                         icon: Icon(
                           Icons.play_arrow_rounded,
@@ -979,7 +979,7 @@ class _PhoneToneCardState extends State<_PhoneToneCard> {
                     const SizedBox(height: 2),
                     Text(
                       'What this phone plays when you press the button on your '
-                      'keyholder. Works the other way round to the alert above.',
+                      'device. Works the other way round to the alert above.',
                       style: AppTypography.bodyMd(color: p.muted),
                     ),
                   ],
@@ -1270,7 +1270,7 @@ class _CalibrationCardState extends State<_CalibrationCard> {
         _message = widget.bleService.isConnected
             ? 'Not enough readings arrived. Calibration unchanged — try again '
                 'holding the phone still.'
-            : 'The keyholder disconnected during the measurement. Calibration '
+            : 'The device disconnected during the measurement. Calibration '
                 'unchanged.';
         return;
       }
@@ -1342,7 +1342,7 @@ class _CalibrationCardState extends State<_CalibrationCard> {
           Text(
             busy
                 ? 'Hold still. Taking readings and keeping the middle one.'
-                : 'Stand this far from the keyholder and tap Measure. The app '
+                : 'Stand this far from the device and tap Measure. The app '
                     'takes a few seconds of readings and keeps the median, '
                     'which throws away the reflections a single reading cannot.',
             style: AppTypography.bodyMd(color: p.muted),
@@ -1413,7 +1413,7 @@ class _CalibrationCardState extends State<_CalibrationCard> {
             Padding(
               padding: const EdgeInsets.only(top: 7),
               child: Text(
-                'Connect to the keyholder first — the measurement samples its '
+                'Connect to the device first — the measurement samples its '
                 'signal.',
                 style: AppTypography.microLabel(color: p.muted),
               ),
@@ -1605,7 +1605,7 @@ class _BatteryCard extends StatelessWidget {
           if (!hasReading) ...[
             const SizedBox(height: 8),
             Text(
-              'Connect to your keyholder to read its battery level.',
+              'Connect to your device to read its battery level.',
               style: AppTypography.bodyMd(color: p.muted),
             ),
           ],
@@ -1767,7 +1767,7 @@ class _BackgroundCardState extends State<_BackgroundCard> {
                   'FindX can watch in the background but cannot record where '
                   'events happen, because location is only allowed while the '
                   'app is open. Set it to "Allow all the time" to keep the '
-                  'event log and your keyholder\'s screen up to date.',
+                  'event log and your device\'s screen up to date.',
               actionIcon: Icons.my_location_rounded,
               actionLabel: 'Open location permission',
               onPressed: () async {
@@ -2056,12 +2056,12 @@ class _OwnershipCard extends StatelessWidget {
                 // — holding its button and claiming it does, and only then does
                 // the phone hold the key that proves ownership later.
                 ? bleService.isConnected
-                    ? 'Connected, but this phone does not own this keyholder '
+                    ? 'Connected, but this phone does not own this device '
                         'yet. If it has no owner, hold its button and tap Claim '
                         'on the Pair screen.'
-                    : 'This phone does not own any keyholder yet. Connect to one '
+                    : 'This phone does not own any device yet. Connect to one '
                         'and claim it while holding its button.'
-                : 'Only this phone can command these keyholders. Anyone else who '
+                : 'Only this phone can command these devices. Anyone else who '
                     'connects is refused and logged.',
             style: AppTypography.bodyMd(color: p.onSurfaceVariant),
           ),
@@ -2115,7 +2115,7 @@ class _OwnershipCard extends StatelessWidget {
                 ? FilledButton.icon(
                     onPressed: () => PairingScreen.open(context, claimTarget),
                     icon: const Icon(Icons.vpn_key_rounded, size: 16),
-                    label: const Text('Claim This Keyholder'),
+                    label: const Text('Claim This Device'),
                   )
                 : OutlinedButton(
                     onPressed: owned.isEmpty
@@ -2135,9 +2135,9 @@ class _OwnershipCard extends StatelessWidget {
                 // Why the button above is grey, said plainly. Without this the
                 // card looks broken rather than inapplicable.
                 bleService.isConnected
-                    ? 'Claiming needs the keyholder in the scan list. Open the '
-                        'Scan tab, then tap your keyholder to pair.'
-                    : 'Nothing to release yet. Connect to a keyholder first.',
+                    ? 'Claiming needs the device in the scan list. Open the '
+                        'Scan tab, then tap your device to pair.'
+                    : 'Nothing to release yet. Connect to a device first.',
                 style: AppTypography.microLabel(color: p.muted),
               ),
             ),
@@ -2150,7 +2150,7 @@ class _OwnershipCard extends StatelessWidget {
                 bleService.isConnected
                     ? 'Connected, but ownership has not been verified yet. Wait '
                         'for the handshake to finish.'
-                    : 'Connect to the keyholder first — releasing needs the '
+                    : 'Connect to the device first — releasing needs the '
                         'device present so it can forget you too.',
                 style: AppTypography.microLabel(color: p.muted),
               ),
@@ -2170,7 +2170,7 @@ class _OwnershipCard extends StatelessWidget {
         title: const Text('Release ownership?'),
         content: Text(
           canRelease
-              ? 'Your keyholder will forget this phone and go back to being '
+              ? 'Your device will forget this phone and go back to being '
                   'unclaimed. The next person to hold its button can claim it — '
                   'including a stranger, if they have the device.\n\n'
                   'Do this when you are selling or giving it away, or when you '
@@ -2179,7 +2179,7 @@ class _OwnershipCard extends StatelessWidget {
               // two would let a user believe they had wiped a device they had
               // only stopped tracking.
               : 'This phone is not verified as the owner right now, so the '
-                  'keyholder cannot be told to forget you.\n\n'
+                  'device cannot be told to forget you.\n\n'
                   'You can still delete the stored key from this phone. The '
                   'device itself will stay claimed and will refuse you '
                   'afterwards — you would need to hold its button for ten '
@@ -2206,7 +2206,7 @@ class _OwnershipCard extends StatelessWidget {
       _toast(
         context,
         sent
-            ? 'Release sent. Waiting for the keyholder to confirm.'
+            ? 'Release sent. Waiting for the device to confirm.'
             : pairing.message,
         isError: !sent,
       );

@@ -98,12 +98,33 @@ class BleService extends ChangeNotifier {
 
   static const Duration _scanTimeout = Duration(seconds: 15);
 
-  /// Pause between the end of one hunting scan and the start of the next.
+  /// Pauses between the end of one hunting scan and the start of the next.
   ///
-  /// Four seconds keeps starts to roughly two per 30-second window, comfortably
-  /// under Android's limit of five, while leaving the radio quiet long enough
-  /// that continuous hunting is not a battery disaster.
-  static const Duration _rescanGap = Duration(seconds: 4);
+  /// The first entries keep starts to roughly two per 30-second window,
+  /// comfortably under Android's limit of five, while leaving the radio quiet
+  /// long enough that hunting is not a battery disaster.
+  ///
+  /// The schedule *grows* because the two cases it serves are different. Four
+  /// seconds is right for the minute after the owner walks away from their keys,
+  /// when they are probably coming straight back. It is wrong for the eight
+  /// hours those keys spend on a desk in another building, where scanning every
+  /// four seconds keeps the radio awake all day for nothing. Two minutes is the
+  /// ceiling: still frequent enough that walking back into range reconnects
+  /// before the owner has crossed the room.
+  ///
+  /// What it never does is run out. The last entry repeats for as long as the
+  /// device is missing, which is the whole point — the app that gives up after
+  /// three tries is the app that is not hunting when the owner comes home.
+  static const List<Duration> _rescanBackoff = <Duration>[
+    Duration(seconds: 4),
+    Duration(seconds: 4),
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+    Duration(seconds: 15),
+    Duration(seconds: 30),
+    Duration(seconds: 60),
+    Duration(minutes: 2),
+  ];
   static const Duration _connectTimeout = Duration(seconds: 20);
 
   /// Backstop for an alert whose STOP never lands.
@@ -125,7 +146,7 @@ class BleService extends ChangeNotifier {
   bool _isConnected = false;
   bool _isConnecting = false;
 
-  String _deviceName = 'Keyholder';
+  String _deviceName = 'Device';
   String _deviceId = '';
 
   int? _batteryLevel;
@@ -531,17 +552,20 @@ class BleService extends ChangeNotifier {
 
   /// Consecutive failed auto-connect attempts.
   ///
-  /// A failed connect re-arms the hunt (see [connectToDevice]), which is right
-  /// for the ordinary case — the keyholder was at the edge of range and the
-  /// link did not come up. But a unit that refuses every time would then be
-  /// retried forever, holding the radio on for the rest of the day. After
-  /// [_maxAutoConnectAttempts] the app stops trying by itself and waits for the
-  /// owner to press scan, which resets this.
+  /// Kept for the message shown to the owner and for the backoff, not as a
+  /// budget. The app used to stop hunting after three failures to spare the
+  /// radio, and that was the wrong trade: walking out of range burns those three
+  /// attempts during the walk, so coming back an hour later found nothing
+  /// looking. The radio is spared by *slowing down* instead — see
+  /// [_rescanBackoff] — which costs nothing and never stops.
   int _autoConnectFailures = 0;
-  static const int _maxAutoConnectAttempts = 3;
+
+  /// How many hunting scans have ended without finding the device, indexing
+  /// into [_rescanBackoff]. Reset whenever a hunt begins afresh.
+  int _huntCycles = 0;
 
   /// True while the app should keep re-arming the scan until it finds the
-  /// keyholder. See [beginContinuousScan].
+  /// device. See [beginContinuousScan].
   bool _keepHunting = false;
   Timer? _rescanTimer;
 
@@ -654,7 +678,7 @@ class BleService extends ChangeNotifier {
       }
       return advertised;
     }
-    return 'Keyholder';
+    return 'Device';
   }
 
   /// The connected (or last known) keyholder's display name.
@@ -962,7 +986,10 @@ class BleService extends ChangeNotifier {
       } else if (_lastError == 'Bluetooth is turned off.') {
         _lastError = '';
         // Turning the adapter back on is the user saying "look again". The
-        // hunt's timer cannot have survived the radio being off, so re-arm it.
+        // hunt's timer cannot have survived the radio being off, so re-arm it —
+        // from the top of the backoff, and forgiving every earlier failure,
+        // because a radio that was off explains all of them.
+        _autoConnectFailures = 0;
         if (!_isConnected && _hasBluetoothPermission) beginContinuousScan();
       }
       notifyListeners();
@@ -994,22 +1021,35 @@ class BleService extends ChangeNotifier {
   /// 7+ penalises with `SCAN_FAILED_SCANNING_TOO_FREQUENTLY` — five starts in a
   /// 30-second window and the app is blocked from scanning for the next half
   /// minute, which would turn "always looking" into "never looking".
+  ///
+  /// The gap also lengthens as the device stays missing, stepping through
+  /// [_rescanBackoff] and holding at its last entry indefinitely.
   void _armRescan() {
     _rescanTimer?.cancel();
-    _rescanTimer = Timer(_rescanGap, () {
+    final int step = _huntCycles < _rescanBackoff.length
+        ? _huntCycles
+        : _rescanBackoff.length - 1;
+    _huntCycles++;
+    _rescanTimer = Timer(_rescanBackoff[step], () {
       if (!_keepHunting || _isConnected || _isConnecting) return;
       unawaited(startActiveHardwareScan(background: true));
     });
   }
 
-  /// Look for the keyholder continuously until it is found.
+  /// Look for the device continuously until it is found.
   ///
   /// Called on launch, on an explicit scan, and — the case that matters most —
   /// the instant a connection drops, because that is exactly when the owner has
   /// walked away from their keys and the app has one job.
-  void beginContinuousScan() {
+  ///
+  /// [resetBackoff] separates a *new* hunt from a continuing one. Walking away
+  /// starts a new hunt and deserves the fast end of [_rescanBackoff]; the ninth
+  /// failed connect attempt against a unit that is out of range does not, or the
+  /// app would scan every four seconds for the rest of the day.
+  void beginContinuousScan({bool resetBackoff = true}) {
     if (kIsWeb) return;
     _keepHunting = true;
+    if (resetBackoff) _huntCycles = 0;
     if (!_isConnected && !_isConnecting && !FlutterBluePlus.isScanningNow) {
       unawaited(startActiveHardwareScan(background: true));
     }
@@ -1018,6 +1058,7 @@ class BleService extends ChangeNotifier {
   /// Stop the hunt. Called on connect, and when the user stops a scan by hand.
   void endContinuousScan() {
     _keepHunting = false;
+    _huntCycles = 0;
     _rescanTimer?.cancel();
     _rescanTimer = null;
   }
@@ -1133,7 +1174,7 @@ class BleService extends ChangeNotifier {
                 connect.isPermanentlyDenied
             ? 'Bluetooth permissions were permanently denied. Enable them in '
                 'Android Settings › Apps › FindX › Permissions.'
-            : 'Nearby-devices permission is required to find your keyholder.';
+            : 'Nearby-devices permission is required to find your device.';
         notifyListeners();
       }
     } catch (e) {
@@ -1176,7 +1217,7 @@ class BleService extends ChangeNotifier {
       final isKeyholder = _looksLikeKeyholder(r, advertised);
 
       if (isKeyholder) {
-        debugPrint('BleService: keyholder discovered — '
+        debugPrint('BleService: device discovered — '
             'id=$id, advName=${advertised ?? '(none)'}, '
             'displayName=${displayNameFor(id, advertised: advertised)}');
       }
@@ -1364,7 +1405,7 @@ class BleService extends ChangeNotifier {
   ///
   /// [background] marks a start the owner did not ask for — the automatic
   /// re-arm in [_armRescan]. Those failures are logged, not shown. The hunt loop
-  /// retries every [_rescanGap] on its own, so surfacing a transient failure
+  /// retries on its own schedule, so surfacing a transient failure
   /// from one of its attempts put a red banner on screen describing something
   /// the app was already in the middle of fixing, and left it there. A scan the
   /// owner started by tapping still reports honestly.
@@ -1383,7 +1424,7 @@ class BleService extends ChangeNotifier {
       return;
     }
     if (!isBluetoothOn) {
-      _lastError = 'Turn Bluetooth on to scan for your keyholder.';
+      _lastError = 'Turn Bluetooth on to scan for your device.';
       notifyListeners();
       return;
     }
@@ -1408,7 +1449,7 @@ class BleService extends ChangeNotifier {
       );
     } catch (e) {
       if (background) {
-        // The hunt loop will try again in [_rescanGap]. Saying so in red would
+        // The hunt loop will try again shortly. Saying so in red would
         // describe a problem the app is already recovering from.
         debugPrint('BleService: background rescan failed to start: $e');
         return;
@@ -1574,22 +1615,32 @@ class BleService extends ChangeNotifier {
       //
       // Re-armed here, in `finally`, because `beginContinuousScan` checks
       // `_isConnecting` and would do nothing if called before the line above.
+      //
+      // It re-arms *every* time now. The old code stopped after three failures
+      // to spare the radio, which quietly recreated the dead end it was written
+      // to fix: walking out of range spends those three attempts during the walk
+      // itself, so the phone had given up long before the owner came back. The
+      // radio is spared by lengthening the gap instead — `resetBackoff: false`
+      // keeps the schedule advancing towards its two-minute ceiling rather than
+      // restarting it — and the hunt simply never ends.
       if (connectFailed && !kIsWeb) {
         _autoConnectFailures++;
-        if (_autoConnectFailures < _maxAutoConnectAttempts) {
-          _autoConnectDone = false;
-          beginContinuousScan();
-        } else {
-          // Out of automatic attempts. Say so, rather than leaving the owner
-          // looking at a screen that claims nothing is wrong — and name the
-          // usual cause, because "found it but could not connect" almost always
-          // means the keyholder is still holding a session open with another
-          // phone, or was carried out of range between the scan hit and the
-          // connect. Neither is obvious from a bare failure count.
+        _autoConnectDone = false;
+        beginContinuousScan(resetBackoff: false);
+
+        // Say something once the failures stop looking like bad luck, rather
+        // than leaving the owner looking at a screen that claims nothing is
+        // wrong — and name the usual cause, because "found it but could not
+        // connect" almost always means the device is still holding a session
+        // open with another phone, or was carried out of range between the scan
+        // hit and the connect. Neither is obvious from a bare failure count.
+        // The wording promises what the code now actually does: keep trying.
+        if (_autoConnectFailures >= 3) {
           _lastError =
-              'Found your keyholder but could not connect after $_autoConnectFailures '
-              'tries. It may still be connected to another phone, or have moved '
-              'out of range. Tap the dial to try again.';
+              'Found your device but could not connect after '
+              '$_autoConnectFailures tries. It may still be connected to '
+              'another phone, or have moved out of range. The app is still '
+              'looking and will connect on its own as soon as it can.';
           notifyListeners();
         }
       }
@@ -1629,7 +1680,7 @@ class BleService extends ChangeNotifier {
   Future<bool> startBonding() async {
     final device = _connectedDevice;
     if (device == null) {
-      _lastError = 'Connect to the keyholder before pairing.';
+      _lastError = 'Connect to the device before pairing.';
       notifyListeners();
       return false;
     }
@@ -1710,7 +1761,7 @@ class BleService extends ChangeNotifier {
     if (target == null) {
       throw StateError(
         'This device does not expose the FindMe service '
-        '(${BleUuids.service}). It is not a keyholder.',
+        '(${BleUuids.service}). It is not a device.',
       );
     }
 
@@ -2151,6 +2202,21 @@ class BleService extends ChangeNotifier {
         deviceName: displayName,
       );
       _backgroundRunningEnabled = started;
+
+      // The battery exemption, asked in the same breath rather than left as a
+      // card the owner has to notice and tap.
+      //
+      // This is the permission that actually decides whether the feature works.
+      // Stock Android honours a foreground service; Xiaomi, Oppo, Vivo and
+      // Huawei run their own battery managers on top and will kill one anyway
+      // unless the app is exempted. An owner who switches "keep watching" on and
+      // is never asked has been given a switch that quietly does nothing on
+      // their phone. Asked once, here, where the reason for it is obvious; a
+      // refusal is still respected and the Settings card continues to offer it.
+      if (started && !await BackgroundService.isBatteryOptimisationDisabled) {
+        await BackgroundService.requestDisableBatteryOptimisation();
+      }
+
       if (!started) {
         _lastError = 'This phone would not let FindX run in the background.';
       } else if (!backgroundLocation) {
@@ -2242,7 +2308,7 @@ class BleService extends ChangeNotifier {
     if (data == BleResponses.notAuthed) {
       _ownershipState = OwnershipState.authFailed;
       _lastError =
-          'The keyholder rejected that command — this phone is not its owner.';
+          'The device rejected that command — this phone is not its owner.';
       notifyListeners();
       return;
     }
@@ -2366,7 +2432,7 @@ class BleService extends ChangeNotifier {
 
       case BleResponses.simpleAuthDenied:
         setOwnershipState(OwnershipState.authFailed);
-        _lastError = 'The keyholder refused this phone.';
+        _lastError = 'The device refused this phone.';
         return true;
     }
     return false;
@@ -2398,7 +2464,7 @@ class BleService extends ChangeNotifier {
       unawaited(pushPhoneLocation());
     } else if (data == BleResponses.authFail) {
       _ownershipState = OwnershipState.authFailed;
-      _lastError = 'The keyholder refused this phone.';
+      _lastError = 'The device refused this phone.';
     } else if (data.startsWith(BleResponses.lockedPrefix)) {
       _ownershipState = OwnershipState.lockedOut;
       final secs = data.substring(BleResponses.lockedPrefix.length).trim();
@@ -2462,7 +2528,7 @@ class BleService extends ChangeNotifier {
   Future<bool> _write(String command) async {
     final c = _dataChar;
     if (c == null || !_isConnected) {
-      _lastError = 'Not connected to a keyholder.';
+      _lastError = 'Not connected to a device.';
       notifyListeners();
       return false;
     }
@@ -2488,7 +2554,7 @@ class BleService extends ChangeNotifier {
   Future<bool> writeAuthFrame(String frame) async {
     final c = _authChar;
     if (c == null || !_isConnected) {
-      _lastError = 'Not connected to a keyholder.';
+      _lastError = 'Not connected to a device.';
       notifyListeners();
       return false;
     }
@@ -2545,7 +2611,7 @@ class BleService extends ChangeNotifier {
   /// command. `_write` has already set `_lastError` in that case.
   Future<void> pingKey() async {
     if (!_isConnected) {
-      _lastError = 'Connect to your keyholder before pinging it.';
+      _lastError = 'Connect to your device before pinging it.';
       notifyListeners();
       return;
     }
@@ -2641,7 +2707,7 @@ class BleService extends ChangeNotifier {
     final entry = _discovered[id];
     if (entry != null && entry.isLockedToAnotherOwner) {
       _lastError =
-          'This keyholder belongs to someone else. Its owner must release it '
+          'This device belongs to someone else. Its owner must release it '
           'before you can pair.';
       notifyListeners();
       return;
@@ -2879,7 +2945,7 @@ class BleService extends ChangeNotifier {
     await setAlertPattern(pattern);
 
     if (!_isConnected) {
-      _lastError = 'Connect to your keyholder to hear the alert.';
+      _lastError = 'Connect to your device to hear the alert.';
       notifyListeners();
       return;
     }

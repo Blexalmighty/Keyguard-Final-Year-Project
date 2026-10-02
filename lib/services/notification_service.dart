@@ -81,7 +81,7 @@ class NotificationService {
           _channelId,
           'Proximity warnings',
           description:
-              'Warns you when your keyholder is moving out of range.',
+              'Warns you when your device is moving out of range.',
           importance: Importance.high,
         ),
       );
@@ -90,7 +90,7 @@ class NotificationService {
           _linkChannelId,
           'Connection status',
           description:
-              'Tells you when your keyholder connects or disconnects.',
+              'Tells you when your device connects or disconnects.',
           // Deliberately below the proximity channel. A connection notice should
           // appear in the shade without interrupting whatever the owner is
           // doing; only "your keys are getting away" has earned a heads-up.
@@ -157,7 +157,7 @@ class NotificationService {
             _channelId,
             'Proximity warnings',
             channelDescription:
-                'Warns you when your keyholder is moving out of range.',
+                'Warns you when your device is moving out of range.',
             importance: Importance.high,
             priority: Priority.high,
             playSound: false,
@@ -212,7 +212,7 @@ class NotificationService {
             _linkChannelId,
             'Connection status',
             channelDescription:
-                'Tells you when your keyholder connects or disconnects.',
+                'Tells you when your device connects or disconnects.',
             importance: Importance.defaultImportance,
             priority: Priority.defaultPriority,
             playSound: false,
@@ -257,7 +257,7 @@ class NotificationService {
             _channelId,
             'Proximity warnings',
             channelDescription:
-                'Warns you when your keyholder is moving out of range.',
+                'Warns you when your device is moving out of range.',
             importance: Importance.high,
             priority: Priority.high,
             playSound: true,
@@ -313,7 +313,7 @@ class NotificationService {
             _channelId,
             'Proximity warnings',
             channelDescription:
-                'Warns you when your keyholder is moving out of range.',
+                'Warns you when your device is moving out of range.',
             importance: Importance.max,
             priority: Priority.max,
             playSound: true,

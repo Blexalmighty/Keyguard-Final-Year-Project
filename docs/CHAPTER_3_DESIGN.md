@@ -266,7 +266,7 @@ graph LR
         BZ["Buzzer"]
     end
     subgraph NET["Internet — optional"]
-        T["OSM tiles"]
+        T["Map tiles"]
         N["Nominatim"]
     end
     GPS --> APP
@@ -733,7 +733,8 @@ graph TB
     B -->|yes| C["stop — the owner's<br/>decision stands"]
     B -->|no| D["resume scanning"]
     D --> E{"known device<br/>seen?"}
-    E -->|no| D
+    E -->|no| E2["wait, then scan again —<br/>gap grows 4 s → 2 min<br/>and never stops"]
+    E2 --> D
     E -->|yes| F["connect"]
     F --> G["authenticate"]
     G --> H["push position, place name,<br/>allowance, cadence"]
@@ -761,10 +762,19 @@ graph TB
     I --> J["Android stack holds the request<br/>and completes it whenever the<br/>keyholder next appears"]
 ```
 
-`autoConnect` rather than a scan, because a reboot is the moment the keyholder is
+`autoConnect` rather than a scan, because a reboot is the moment the device is
 *least* likely to be in range — the phone may be charging in another room. A scan
 would find nothing and give up; the platform stack holds the request open at no
 cost in application-side battery.
+
+The handler then checks that the request actually took. `autoConnect` is a
+request to the Bluetooth stack, not a guarantee, and the stack drops standing
+requests when the adapter is cycled — so every fifteen minutes the service
+re-arms it if no link is up, and after a full interval with no link it posts a
+notification asking the owner to open the app. That notice is posted once per
+outage, from its own notification channel, and is suppressed entirely when
+`user_disconnected` is set: an owner who switched the link off themselves should
+not be nagged to switch it back on.
 
 ### 3.8.5 Position push
 

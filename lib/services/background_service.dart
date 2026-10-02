@@ -21,16 +21,19 @@
 /// Instead: the foreground service runs in the *same process* as the main
 /// isolate. Holding the process open is sufficient on its own — Dart timers,
 /// stream subscriptions and the native GATT connection inside flutter_blue_plus
-/// all keep running, because nothing ever tore them down. [_KeepAliveHandler] is
-/// consequently almost empty, and that emptiness is the design, not an omission.
+/// all keep running, because nothing ever tore them down. [_KeepAliveHandler]
+/// consequently does nothing at all while the app is open, and that emptiness is
+/// the design, not an omission.
 ///
 /// There is exactly one exception, and it is the case the rule does not cover.
 /// After a reboot Android starts this service from its boot receiver, with no
 /// Activity and therefore **no main isolate** — so the reasoning above inverts:
 /// there is no other `BleService` to collide with, and an empty handler would
-/// mean a phone that restarted overnight simply stopped watching. The handler
-/// re-arms the connection itself in that one case. See
-/// `_KeepAliveHandler._reconnectAfterSystemStart`.
+/// mean a phone that restarted overnight simply stopped watching. In that case
+/// the handler re-arms the connection itself, re-checks it every quarter of an
+/// hour, and notifies the owner if it never came back. See
+/// `_KeepAliveHandler._reconnectAfterSystemStart` and
+/// `_KeepAliveHandler._checkLinkAfterSystemStart`.
 ///
 /// # Platform reality
 ///
@@ -42,12 +45,14 @@
 /// platform checks.
 library;
 
+import 'dart:async' show unawaited;
 import 'dart:io' show Platform;
 import 'dart:ui' show DartPluginRegistrant;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Entry point for the service's isolate.
@@ -60,25 +65,53 @@ void startBackgroundCallback() {
   FlutterForegroundTask.setTaskHandler(_KeepAliveHandler());
 }
 
-/// Does almost nothing, on purpose — with one exception, after a reboot.
+/// Does almost nothing while the app is open, on purpose — and does the work
+/// itself when the app is not there to do it.
 ///
 /// While the app has been launched, the service's value is the process it keeps
-/// alive, not the code it runs: `onRepeatEvent` never fires, the main isolate
-/// still holds the one [BleService], and this isolate costs a thread sitting
-/// idle. Putting routine BLE work here would mean a second [BleService] on the
-/// other side of an isolate boundary, which is the bug this design avoids.
+/// alive, not the code it runs: the main isolate still holds the one
+/// [BleService], and this isolate costs a thread sitting idle. Putting routine
+/// BLE work here would mean a second [BleService] on the other side of an
+/// isolate boundary, which is the bug this design avoids — so [onRepeatEvent]
+/// returns immediately in that case.
 ///
 /// The exception is a start that came from the *system* rather than from the
 /// app — a reboot, or an app update. There is no Activity in that case and so
 /// **no main isolate at all**: nothing has constructed a [BleService], nothing
 /// is scanning, and an owner who restarted their phone overnight would find the
-/// keyholder unwatched until they next opened the app. Since there is no main
-/// isolate to collide with, this one can safely re-establish the link itself.
-/// See [_reconnectAfterSystemStart].
+/// device unwatched until they next opened the app. Since there is no main
+/// isolate to collide with, this one can safely re-establish the link itself,
+/// keep checking that it held, and say so if it never came back. See
+/// [_reconnectAfterSystemStart] and [_checkLinkAfterSystemStart].
 class _KeepAliveHandler extends TaskHandler {
+  /// Who started this service — the discriminator for everything above.
+  ///
+  /// Held as state because [onRepeatEvent] gets no starter of its own, and the
+  /// difference between "the app is open and owns the radio" and "the phone
+  /// rebooted and nobody is watching" is the only thing that decides whether
+  /// this isolate may touch Bluetooth at all.
+  TaskStarter? _starter;
+
+  /// Consecutive repeat events that found no link to the device.
+  int _repeatsWithoutLink = 0;
+
+  /// Latches the reconnect notice so it is posted once per outage rather than
+  /// every fifteen minutes. Cleared when the link comes back, so a second
+  /// outage is announced again.
+  bool _reconnectPingPosted = false;
+
+  /// How many fruitless repeats before the owner is told.
+  ///
+  /// One, at the 15-minute interval, so a reboot that reconnects on its own
+  /// within the first quarter of an hour is never announced. Pinging the owner
+  /// about something the app has already fixed is how a notification channel
+  /// earns itself a permanent mute.
+  static const int _pingAfterRepeats = 1;
+
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     debugPrint('BackgroundService: process held open (${starter.name})');
+    _starter = starter;
 
     // Started by the app: the main isolate owns the radio and is already
     // connecting. Touching BLE from here would be the two-instance bug.
@@ -87,7 +120,7 @@ class _KeepAliveHandler extends TaskHandler {
     await _reconnectAfterSystemStart();
   }
 
-  /// Re-establishes the keyholder link with no UI and no main isolate.
+  /// Re-establishes the device link with no UI and no main isolate.
   ///
   /// Deliberately not a [BleService]: this makes three plugin calls and then
   /// gets out of the way. The moment the owner opens the app, the main isolate
@@ -96,11 +129,11 @@ class _KeepAliveHandler extends TaskHandler {
   /// window in which both exist is exactly where a two-instance bug would live.
   ///
   /// `autoConnect: true` is what makes this work at boot specifically. A reboot
-  /// is the one moment the keyholder is least likely to be in range — the phone
+  /// is the one moment the device is least likely to be in range — the phone
   /// may be charging in another room — so a scan would find nothing and give
   /// up. With autoConnect the request is handed to the Android Bluetooth stack,
-  /// which holds it open and completes the connection whenever the keyholder
-  /// next appears, at no cost in app-side battery. It is also why no scan is
+  /// which holds it open and completes the connection whenever the device next
+  /// appears, at no cost in app-side battery. It is also why no scan is
   /// started here: the stack does the waiting.
   Future<void> _reconnectAfterSystemStart() async {
     if (!BackgroundService.isSupported) return;
@@ -136,24 +169,149 @@ class _KeepAliveHandler extends TaskHandler {
             .timeout(const Duration(seconds: 30));
       }
 
-      // mtu must be null alongside autoConnect — flutter_blue_plus asserts on
-      // it, because the MTU exchange cannot be scheduled for a connection that
-      // has not happened yet. BleService raises the MTU once the app is open.
-      await BluetoothDevice.fromId(deviceId).connect(
-        autoConnect: true,
-        mtu: null,
-      );
+      await _armAutoConnect(deviceId);
       debugPrint('BackgroundService: boot reconnect armed for $deviceId');
     } catch (e) {
       // A reboot is not a moment to surface anything to anybody: there is no UI
-      // to surface it to. The owner opening the app starts a normal scan, which
-      // is the recovery path.
+      // to surface it to — and the repeat event below is what notices if this
+      // never succeeded, which is the case worth telling the owner about.
       debugPrint('BackgroundService: boot reconnect failed — $e');
     }
   }
 
+  /// Hands a standing connection request to the Android Bluetooth stack.
+  ///
+  /// `mtu` must be null alongside `autoConnect` — flutter_blue_plus asserts on
+  /// it, because the MTU exchange cannot be scheduled for a connection that has
+  /// not happened yet. BleService raises the MTU once the app is open.
+  Future<void> _armAutoConnect(String deviceId) =>
+      BluetoothDevice.fromId(deviceId).connect(autoConnect: true, mtu: null);
+
+  /// Fires every [BackgroundService._repeatInterval] while the service runs.
+  ///
+  /// Synchronous by signature, so the real work is started and not awaited. A
+  /// failure in it must not take the service down — the process this isolate is
+  /// holding open is worth more than any single check.
   @override
-  void onRepeatEvent(DateTime timestamp) {}
+  void onRepeatEvent(DateTime timestamp) {
+    // The app is open: the main isolate is hunting, polling RSSI and posting
+    // alerts. There is nothing for this isolate to do and a real cost to it
+    // trying.
+    if (_starter == TaskStarter.developer) return;
+    unawaited(_checkLinkAfterSystemStart());
+  }
+
+  /// Keeps a boot-started service honest about whether it actually reconnected.
+  ///
+  /// `autoConnect` is a request to the Bluetooth stack, not a guarantee: the
+  /// stack drops standing requests when the adapter is cycled, and on several
+  /// manufacturers' builds it loses them for less reason than that. So the
+  /// request is re-armed on every repeat that finds no link, which costs one
+  /// plugin call a quarter of an hour.
+  ///
+  /// And when it keeps failing, the owner is told. That is the one thing the old
+  /// empty handler could not do: a phone that restarted at 3am and could not
+  /// find the device would simply stay quiet until noon, which is the failure
+  /// mode of every key finder nobody trusts.
+  Future<void> _checkLinkAfterSystemStart() async {
+    if (!BackgroundService.isSupported) return;
+    DartPluginRegistrant.ensureInitialized();
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      // Still the owner's decision, still outliving the reboot. Nagging
+      // somebody to reconnect a link they switched off themselves would be
+      // worse than silence.
+      if (prefs.getBool('user_disconnected') ?? false) return;
+
+      final deviceId = prefs.getString('last_device_id');
+      if (deviceId == null || deviceId.isEmpty) return;
+
+      final linked = FlutterBluePlus.connectedDevices
+          .any((d) => d.remoteId.str == deviceId);
+      if (linked) {
+        _repeatsWithoutLink = 0;
+        // Re-armed, not left set: if this link drops again tomorrow the owner
+        // should hear about that outage too.
+        _reconnectPingPosted = false;
+        return;
+      }
+
+      _repeatsWithoutLink++;
+
+      if (FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on) {
+        try {
+          await _armAutoConnect(deviceId);
+        } catch (e) {
+          // Most often "already connecting" — the previous request is still
+          // standing, which is the outcome this call wanted anyway.
+          debugPrint('BackgroundService: re-arm declined — $e');
+        }
+      }
+
+      if (_repeatsWithoutLink >= _pingAfterRepeats && !_reconnectPingPosted) {
+        _reconnectPingPosted = true;
+        await _postReconnectPing();
+      }
+    } catch (e) {
+      debugPrint('BackgroundService: background link check failed — $e');
+    }
+  }
+
+  /// Asks the owner to open the app and reconnect.
+  ///
+  /// Posted with a plugin instance of this isolate's own, because
+  /// `NotificationService` lives in the main isolate and there is no main
+  /// isolate here. Its own channel too, at high importance: this is the one
+  /// message in the app that is worth interrupting somebody for *because*
+  /// nothing else can be. Separate from the three channels
+  /// `NotificationService` owns, so an owner who mutes it keeps the proximity
+  /// warnings — and the reverse.
+  Future<void> _postReconnectPing() async {
+    try {
+      final plugin = FlutterLocalNotificationsPlugin();
+      await plugin.initialize(
+        const InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        ),
+      );
+
+      final android = plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      await android?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          BackgroundService.reconnectChannelId,
+          'Reconnect reminders',
+          description: 'Asks you to reopen FindX when it cannot reconnect to '
+              'your device on its own after a restart.',
+          importance: Importance.high,
+        ),
+      );
+
+      await plugin.show(
+        BackgroundService.reconnectNotificationId,
+        'FindX needs you to reconnect',
+        'Your phone restarted and FindX has not been able to reach your '
+            'device on its own. Open the app to connect again.',
+        const NotificationDetails(
+          android: AndroidNotificationDetails(
+            BackgroundService.reconnectChannelId,
+            'Reconnect reminders',
+            channelDescription: 'Asks you to reopen FindX when it cannot '
+                'reconnect to your device on its own after a restart.',
+            importance: Importance.high,
+            priority: Priority.high,
+            // Dismissable, unlike the ongoing service notice: the owner has
+            // read it, and the next outage will post it again.
+            autoCancel: true,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('BackgroundService: reconnect ping failed — $e');
+    }
+  }
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
@@ -202,6 +360,26 @@ class BackgroundService {
   /// button the only honest exit.
   static const String stopButtonId = 'stop_background';
 
+  /// Channel and id for the "open the app and reconnect" notice.
+  ///
+  /// Declared here rather than in the handler so the handler and anything that
+  /// later needs to cancel the notice agree on the numbers, and so the id can be
+  /// checked against the 1001–1004 block `NotificationService` uses — ids
+  /// collide silently, and a collision would mean one notice quietly replacing
+  /// another.
+  static const String reconnectChannelId = 'findx_reconnect';
+  static const int reconnectNotificationId = 1005;
+
+  /// How often the service's isolate wakes to check the link after a reboot.
+  ///
+  /// Fifteen minutes is the shortest interval Android's own background limits
+  /// treat as reasonable, and it is far more often than the situation needs:
+  /// the Bluetooth stack is doing the actual reconnecting, so all this does is
+  /// re-arm a request that may have been dropped and notice when it keeps
+  /// failing. A shorter interval would spend battery to no end; a longer one
+  /// would leave the owner uninformed for most of a morning.
+  static const int _repeatIntervalMs = 15 * 60 * 1000;
+
   /// True on platforms where a foreground service is a real thing.
   ///
   /// `kIsWeb` is checked first because `Platform.isAndroid` throws in a browser.
@@ -229,7 +407,7 @@ class BackgroundService {
         channelId: 'findx_background',
         channelName: 'Background monitoring',
         channelDescription:
-            'Shown while FindX is watching your keyholder in the background.',
+            'Shown while FindX is watching your device in the background.',
         // LOW: visible in the shade, never a sound or a heads-up banner. This
         // notification is a status line, not an alert — the alerts are the
         // other two channels' job.
@@ -247,11 +425,18 @@ class BackgroundService {
         playSound: false,
       ),
       foregroundTaskOptions: ForegroundTaskOptions(
-        // No repeating callback: see [_KeepAliveHandler].
-        eventAction: ForegroundTaskEventAction.nothing(),
+        // A repeating callback, which is new. It used to be `nothing()`, on the
+        // reasoning that the main isolate does all the work — true while the app
+        // is open, and the handler still returns immediately in that case. What
+        // it missed is the boot start, where there is no main isolate: the
+        // service armed one reconnect in `onStart` and then never looked again,
+        // so a standing request the Bluetooth stack had dropped was never
+        // noticed and the owner was never told. See
+        // [_KeepAliveHandler.onRepeatEvent].
+        eventAction: ForegroundTaskEventAction.repeat(_repeatIntervalMs),
         // Come back after a reboot. This is what "keeps working like WhatsApp"
         // means in practice: a phone that restarts overnight must not quietly
-        // stop watching the keyholder, leaving the owner to discover at noon
+        // stop watching the device, leaving the owner to discover at noon
         // that the app has been off since 3am.
         //
         // It is not as presumptuous as it looks. The plugin's boot receiver only
@@ -421,7 +606,7 @@ class BackgroundService {
   }
 
   static String _title({required bool connected}) =>
-      connected ? 'Keyholder connected' : 'Watching for your keyholder';
+      connected ? 'Device connected' : 'Watching for your device';
 
   /// Wording matters here: this notification is permanently in the owner's
   /// shade, so it should say something true and useful rather than "service

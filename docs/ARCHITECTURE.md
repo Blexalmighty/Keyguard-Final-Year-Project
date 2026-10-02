@@ -36,7 +36,7 @@ graph TB
     end
 
     subgraph CLOUD["Internet — read-only, optional"]
-        OSM["OpenStreetMap<br/>raster tiles"]
+        OSM["Esri imagery +<br/>OSM tiles"]
         NOM["Nominatim<br/>reverse geocoding"]
     end
 
@@ -119,7 +119,7 @@ alert, every alarm and every log entry still work.
 
 `motion.dart` (355) · `passkey_entry_sheet.dart` (330) · `radar_painter.dart`
 (321) · `map_painter.dart` (212) · `map_modal.dart` (189) · `map_tiles.dart`
-(169) · `phone_ringing_banner.dart` (117) · `signal_bar.dart` (91) ·
+(283) · `phone_ringing_banner.dart` (117) · `signal_bar.dart` (91) ·
 `ownership_badge.dart` (85) · `app_logo_tile.dart` (76) · `battery_pill.dart`
 (75) · `section_label.dart` (50)
 
@@ -506,10 +506,19 @@ graph TB
 ```
 
 `autoConnect: true` rather than a scan, because a reboot is the moment the
-keyholder is *least* likely to be in range — the phone may be charging in
+device is *least* likely to be in range — the phone may be charging in
 another room. A scan would find nothing and give up; the stack holds the request
 open at no app-side battery cost. (`mtu` must be `null` alongside it: the
 exchange cannot be scheduled for a connection that has not happened yet.)
+
+A standing request is a request, not a guarantee: cycling the adapter drops it.
+The service therefore wakes every fifteen minutes (`eventAction`) to check
+whether the link actually exists, and re-arms `autoConnect` if it does not. If it
+wakes to find the device still missing it posts one notification — *once per
+outage*, cleared when the link returns — asking the owner to open the app. That
+matters because this isolate has no UI: without it, a standing request the stack
+had quietly dropped would leave the owner believing the app was watching when
+nothing was.
 
 ### The one thing that stops it
 
@@ -538,7 +547,7 @@ undone.**
 | `RECEIVE_BOOT_COMPLETED` | Reconnect after a reboot. | install |
 | `READ_MEDIA_AUDIO` / `READ_EXTERNAL_STORAGE` | A custom ring tone. The system picker needs no permission; these are declared so the request the owner expects actually appears, and a refusal is non-fatal. | runtime |
 | `VIBRATE` | A phone under a cushion is found by feel. | install |
-| `INTERNET`, `ACCESS_NETWORK_STATE` | Map tiles, reverse geocoding, the address readout. | install |
+| `INTERNET`, `ACCESS_NETWORK_STATE` | Map tiles (Esri imagery over OpenStreetMap), reverse geocoding, the address readout. | install |
 
 `usesCleartextTraffic="false"`: nothing here needs plaintext HTTP, so Android
 itself blocks any accidental plaintext request.

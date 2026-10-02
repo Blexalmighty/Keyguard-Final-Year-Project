@@ -150,7 +150,7 @@ class _PasskeyEntrySheetState extends State<PasskeyEntrySheet> {
               const SizedBox(height: 14),
               _Notice(
                 icon: Icons.lock_rounded,
-                message: 'This phone is already paired with the keyholder. The '
+                message: 'This phone is already paired with the device. The '
                     'link is encrypted.',
                 fg: p.success,
                 bg: p.successSoft,
@@ -218,7 +218,7 @@ class _PasskeyEntrySheetState extends State<PasskeyEntrySheet> {
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  'Skipping does not skip the code — the keyholder refuses '
+                  'Skipping does not skip the code — the device refuses '
                   'unencrypted requests, so the phone will ask for it during '
                   'the claim instead, while you are holding the button.',
                   textAlign: TextAlign.center,

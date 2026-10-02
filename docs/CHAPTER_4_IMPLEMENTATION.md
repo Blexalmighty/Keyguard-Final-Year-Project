@@ -173,11 +173,19 @@ the alerting path depends on it.
 
 ### 4.3.7 Map rendering
 
-Raster tiles are fetched from OpenStreetMap and drawn by a `CustomPainter`
-(`map_painter.dart`, 212 lines; `map_tiles.dart`, 169 lines). A full mapping SDK
-was not adopted: it would add several megabytes to the APK and a second
-permission surface, to deliver pan-and-zoom on a screen whose job is to show one
-marker.
+Raster tiles are drawn by a `CustomPainter` (`map_painter.dart`, 212 lines;
+`map_tiles.dart`, 283 lines), in two stacked layers: aerial imagery from Esri's
+World Imagery service over OpenStreetMap street cartography, at zoom 18. The
+ordering is the design — aerial coverage at building zoom is not universal, and
+where an imagery tile is missing its request fails and the street map underneath
+shows through, so the card degrades to a street map rather than to a hole.
+
+A full mapping SDK was not adopted, and the reason is not only APK weight.
+Google's Maps SDK requires a Cloud API key with a billing account attached and
+renders a blank grey square without one; using Google's tile endpoints directly
+instead of the SDK breaches their terms of service. Neither cost is acceptable
+for a screen whose job is to show one marker, so the two open sources above are
+used and the picture is a raster rather than a live map.
 
 Tapping the map opens the position in the device's installed maps application,
 which is where a user wants to be for routing in any case.
@@ -205,7 +213,7 @@ registered at all.
 | `autoRunOnBoot` | `true` | Restart after a reboot. |
 | `autoRunOnMyPackageReplaced` | `true` | An app update must not silently stop monitoring. |
 | `allowWakeLock` | `false` | The radio wakes the CPU for each connection event; a wake lock would cost battery for nothing. |
-| `eventAction` | `nothing()` | No repeating callback — the service runs no logic. |
+| `eventAction` | `repeat(15 min)` | Wakes the service isolate to re-check the link after a reboot. The handler returns immediately when the platform reports it was started by the application, so the callback costs nothing at all in the ordinary case. |
 | Channel importance | `LOW` | A status line, not an alert. An owner who mutes "FindX is running" must not thereby mute "your keys are moving away". |
 
 The notification carries a **Stop** button. An ongoing notification cannot be

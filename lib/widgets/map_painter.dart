@@ -5,8 +5,8 @@ import 'map_tiles.dart';
 
 /// The location card's map.
 ///
-/// Given [latitude] and [longitude] this shows real cartography, fetched from
-/// OpenStreetMap — streets, buildings and their names, with the fix pinned on
+/// Given [latitude] and [longitude] this shows real cartography, fetched as
+/// raster tiles — aerial imagery over street mapping, with the fix pinned on
 /// top. That is the point of the card: "Amphitheatre, OAU" drawn on the actual
 /// campus is something the owner can walk to, where a coordinate pair over a
 /// grey grid is something they have to go and decode somewhere else.

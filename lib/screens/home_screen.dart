@@ -296,7 +296,7 @@ class _ConnectionCard extends StatelessWidget {
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
-          title: const Text('Rename this keyholder'),
+          title: const Text('Rename this device'),
           content: TextField(
             controller: controller,
             autofocus: true,
