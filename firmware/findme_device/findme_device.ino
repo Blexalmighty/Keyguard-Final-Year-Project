@@ -6,7 +6,6 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 #include <esp_system.h>
-#include <esp_pm.h>
 #include <Preferences.h>
 
 // ================================================================
@@ -46,41 +45,78 @@ const char* resetReasonName(esp_reset_reason_t r) {
 // ================================================================
 // POWER & ACTIVITY SETTINGS
 // ================================================================
-#define INACTIVITY_TIMEOUT_MS  600000UL   // 10 minutes → low power
-#define FULL_POWER_HOLD_MS     30000UL    // stay full power 30s after activity
+#define INACTIVITY_TIMEOUT_MS  600000UL  // 10 min without user activity
+#define DISPLAY_LINGER_MS      6000UL    // OLED stays lit this long in low power
 
-// ================================================================
-// LOW POWER MODE
-// CPU drops to 80MHz, light sleep between BLE events
-// BLE stays fully connected — only clock speed reduces
-// ================================================================
+// ----------------------------------------------------------------
+// WHY THERE IS NO LIGHT SLEEP HERE
+// ----------------------------------------------------------------
+// An earlier version of this file called esp_pm_configure() with
+// light_sleep_enable = true and printed "low power ON". It did nothing at all.
+// The Arduino ESP32 core ships its IDF prebuilt with
+//
+//     # CONFIG_PM_ENABLE is not set
+//
+// so esp_pm_configure() returns ESP_ERR_NOT_SUPPORTED and returns immediately.
+// Automatic light sleep cannot be switched on from a sketch; it needs the core
+// rebuilt from source with CONFIG_PM_ENABLE and CONFIG_FREERTOS_USE_TICKLESS_IDLE.
+//
+// And it would be the wrong tool even then. This board has no 32.768 kHz
+// crystal (CONFIG_RTC_CLK_SRC_INT_RC=y), so sleep timing comes from the
+// internal RC oscillator, which drifts percent-wise. BLE connection events
+// have to be met inside a window of a few hundred microseconds. Sleeping on an
+// RC clock means missing them, and missing enough of them means the supervision
+// timer expires and the link drops — the precise opposite of "still connected
+// to the app".
+//
+// So low power here is not sleep. It is four things that each cut real current
+// while the link stays up, in rough order of how much they save:
+//
+//   1. A long BLE connection interval. The dominant cost of a connected
+//      peripheral is the radio waking for every connection event. See
+//      CONN_SLOW_* below — this is the big one, and the old code never touched it.
+//   2. The OLED off. A lit SSD1306 draws a few mA continuously, which on a
+//      700 mAh cell is days of standby.
+//   3. CPU at 80 MHz instead of 160.
+//   4. Not doing pointless work — no display cycling, slower battery reports,
+//      a longer idle delay so the FreeRTOS idle task can let modem sleep run.
+//
+// Modem sleep, which is what actually powers the radio down between connection
+// events, is on by default and needs no code. Lengthening the interval is what
+// gives it more to work with.
+
+// Connection intervals, in BLE's own 1.25 ms units.
+//
+// At the 7.5–22.5 ms this sketch used to advertise as preferred, the radio wakes
+// 44–133 times a second whether or not there is anything to say. At 500 ms with
+// a slave latency of 4 the device may skip four consecutive events, so the floor
+// is two wakes a second: the same link, one to two orders of magnitude less
+// radio time.
+//
+// The supervision timeout must exceed (1 + latency) * maxInterval * 2, or the
+// controller rejects the request outright. Here that floor is 5 * 600 ms = 6 s,
+// so 8 s is used.
+#define CONN_FAST_MIN   24   //  30 ms — a button ping should feel instant
+#define CONN_FAST_MAX   40   //  50 ms
+#define CONN_FAST_LAT    0
+#define CONN_FAST_TMO  400   //   4 s
+
+#define CONN_SLOW_MIN  400   // 500 ms
+#define CONN_SLOW_MAX  480   // 600 ms
+#define CONN_SLOW_LAT    4   // may skip four events
+#define CONN_SLOW_TMO  800   //   8 s
+
+// Advertising intervals, in BLE's 0.625 ms units. These matter only while
+// disconnected. Slower advertising costs reconnect latency, but the app's own
+// hunt backoff tops out at two minutes between scans, so one to two seconds
+// here is still far quicker than the phone will ever look.
+#define ADV_FAST_MIN  0x0020  //  20 ms
+#define ADV_FAST_MAX  0x0040  //  40 ms
+#define ADV_SLOW_MIN  0x0640  //   1 s
+#define ADV_SLOW_MAX  0x0C80  //   2 s
+
 bool lowPowerActive = false;
-
-void enableLowPower() {
-  if (lowPowerActive) return;
-  setCpuFrequencyMhz(80);
-  esp_pm_config_esp32c3_t pm = {
-    .max_freq_mhz       = 80,
-    .min_freq_mhz       = 10,
-    .light_sleep_enable = true
-  };
-  esp_pm_configure(&pm);
-  lowPowerActive = true;
-  Serial.println("[PM] Low power ON — 80MHz, light sleep");
-}
-
-void disableLowPower() {
-  if (!lowPowerActive) return;
-  setCpuFrequencyMhz(160);
-  esp_pm_config_esp32c3_t pm = {
-    .max_freq_mhz       = 160,
-    .min_freq_mhz       = 80,
-    .light_sleep_enable = false
-  };
-  esp_pm_configure(&pm);
-  lowPowerActive = false;
-  Serial.println("[PM] Full power ON — 160MHz");
-}
+bool displayAsleep  = false;
 
 // ================================================================
 // OBJECTS
@@ -129,9 +165,16 @@ int displayMode      = 0;
 // Distance threshold set by app (in metres, -1 = not set)
 int distanceThresholdM = -1;
 
-// Activity tracking
-unsigned long lastActivityTime = 0;  // millis of last event
-unsigned long fullPowerUntil   = 0;  // millis to stay full power
+// Activity tracking.
+//
+// `fullPowerUntil` used to live here as a 30-second grace window after any
+// event. It was dead logic: the window always expired long before the
+// ten-minute inactivity timeout it guarded, so it never changed an outcome.
+unsigned long lastActivityTime = 0;  // millis of last *user* activity
+
+// In low power the OLED is dark. When something worth reading is drawn it
+// lights up until this moment, then goes back to sleep.
+unsigned long displayLingerUntil = 0;
 
 int  buttonState    = HIGH;
 int  lastButtonState = HIGH;
@@ -168,18 +211,100 @@ bool bleFrameIsComplete(const String& s);
 void flushStaleBleBuffer();
 
 // ================================================================
-// ACTIVITY TRACKING
-// Call this whenever something meaningful happens
-// Resets inactivity timer and ensures full power for 30 seconds
+// POWER PROFILES
 // ================================================================
+
+/// Asks the phone to slow the link down, or speed it back up.
+///
+/// A peripheral cannot set the connection interval; only the central can. This
+/// is a *request*, and Android is free to refuse it — though in practice it
+/// honours a peripheral's update when the values are legal. Nothing here
+/// depends on it succeeding: a refusal costs battery, not the connection.
+///
+/// This core builds its BLE library on NimBLE, so a connection is addressed by
+/// handle rather than by peer address, and the handle is already on the server
+/// by the time onConnect runs.
+void applyConnParams(bool slow) {
+  if (!deviceConnected || pServer == nullptr) return;
+  const uint16_t h = pServer->getConnId();
+  if (slow) {
+    pServer->updateConnParams(h, CONN_SLOW_MIN, CONN_SLOW_MAX,
+                              CONN_SLOW_LAT, CONN_SLOW_TMO);
+    Serial.println("[PM] Asked phone for a 500 ms connection interval");
+  } else {
+    pServer->updateConnParams(h, CONN_FAST_MIN, CONN_FAST_MAX,
+                              CONN_FAST_LAT, CONN_FAST_TMO);
+    Serial.println("[PM] Asked phone for a 30 ms connection interval");
+  }
+}
+
+/// Advertising cadence. Only has any effect while disconnected.
+void applyAdvInterval(bool slow) {
+  BLEAdvertising* pAdv = BLEDevice::getAdvertising();
+  if (pAdv == nullptr) return;
+  pAdv->setMinInterval(slow ? ADV_SLOW_MIN : ADV_FAST_MIN);
+  pAdv->setMaxInterval(slow ? ADV_SLOW_MAX : ADV_FAST_MAX);
+}
+
+void wakeDisplay() {
+  if (displayAsleep) {
+    u8g2.setPowerSave(0);
+    displayAsleep = false;
+  }
+  // Only meaningful in low power; at full power the panel simply stays on.
+  displayLingerUntil = millis() + DISPLAY_LINGER_MS;
+}
+
+void sleepDisplay() {
+  if (displayAsleep) return;
+  u8g2.clearBuffer();
+  u8g2.sendBuffer();
+  u8g2.setPowerSave(1);
+  displayAsleep = true;
+}
+
+void enableLowPower() {
+  if (lowPowerActive) return;
+  lowPowerActive = true;
+
+  setCpuFrequencyMhz(80);
+  applyConnParams(true);
+  applyAdvInterval(true);
+  sleepDisplay();
+
+  Serial.println("[PM] Low power: 80 MHz, OLED off, slow link");
+}
+
+void disableLowPower() {
+  if (!lowPowerActive) return;
+  lowPowerActive = false;
+
+  setCpuFrequencyMhz(160);
+  applyConnParams(false);
+  applyAdvInterval(false);
+  wakeDisplay();
+
+  Serial.println("[PM] Full power: 160 MHz, OLED on, fast link");
+}
+
+// ================================================================
+// ACTIVITY TRACKING
+// ================================================================
+
+/// Call when the *owner* does something — a button press, a ring, a pairing.
+///
+/// Deliberately not called for the app's housekeeping traffic. The app pushes
+/// its location every two minutes and polls the battery; when every one of
+/// those reset this timer, a ten-minute idle timeout could never expire while
+/// the phone was connected, which made low power unreachable in exactly the
+/// situation it was wanted for. Housekeeping is not activity. A finger is.
 void registerActivity() {
   lastActivityTime = millis();
-  fullPowerUntil   = millis() + FULL_POWER_HOLD_MS;
-
-  // Wake to full power if currently in low power mode
   if (lowPowerActive) {
+    Serial.println("[PM] Activity — waking to full power");
     disableLowPower();
-    Serial.println("[PM] Activity detected — waking to full power");
+  } else {
+    wakeDisplay();
   }
 }
 
@@ -333,6 +458,10 @@ int rssiToMetres(int rssi) {
 // OLED — centred splash
 // ================================================================
 void showCentred(String line1, String line2, String line3) {
+  // Anything drawn through here is something the owner is meant to read, so it
+  // lights the panel even in low power. What keeps the panel dark is that the
+  // idle display cycle stops calling it — see loop().
+  wakeDisplay();
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_ncenB08_tr);
   auto cx = [](const String& s) -> int {
@@ -355,6 +484,7 @@ void showCentred(String line1, String line2, String line3) {
 // OLED — battery top right, content centred and below battery row
 // ================================================================
 void showOnOLED(String line1, String line2, String line3) {
+  wakeDisplay();
   int bat = cachedBatPercent;
   u8g2.clearBuffer();
 
@@ -504,13 +634,33 @@ void handleLowBattery() {
 // ================================================================
 // PROCESS BLE COMMAND
 // ================================================================
+
+/// True for commands that mean a person did something, as opposed to the app's
+/// periodic housekeeping — location pushes, battery and threshold polls — which
+/// happen whether or not anybody is holding the phone.
+///
+/// `AUTH:` is housekeeping too: it fires on every reconnect by itself.
+/// `LOW_POWER:` is deliberately absent, because treating "go to low power" as
+/// activity would wake the device straight back up again.
+bool isOwnerIntent(const String& v) {
+  return v == "FIND_KEY" || v == "STOP" || v == "TEST_BUZZ" ||
+         v == "UNPAIR"   || v == "FIND_PHONE_ACK" ||
+         v.startsWith("PAIR:") || v.startsWith("SET_DIST:") ||
+         v.startsWith("DIST_EXCEEDED:");
+}
+
 void processBLECommand(String value) {
   value.trim();
   if (value.length() == 0) return;
   Serial.println("[BLE] CMD: " + value);
 
-  // Any command counts as activity
-  registerActivity();
+  // Housekeeping is not activity.
+  //
+  // This used to be an unconditional registerActivity(). Since the app pushes
+  // its location every two minutes and polls the battery, every poll reset the
+  // ten-minute idle timer — so low power could never be entered while a phone
+  // was connected, which is the one case it was asked for.
+  if (isOwnerIntent(value)) registerActivity();
 
   if (value.startsWith("PAIR:")) {
     if (!deviceRegistered) {
@@ -646,7 +796,12 @@ void processBLECommand(String value) {
     return;
   }
 
-  // Manual low power toggle from app
+  // Manual low power toggle from app.
+  //
+  // Neither of these goes through registerActivity(): "enter low power" must
+  // not wake the device, and "leave low power" has to restart the idle clock by
+  // hand or the next pass of loop() would see a ten-minute-old timestamp and
+  // drop straight back in.
   if (value == "LOW_POWER:ON") {
     enableLowPower();
     broadcastViaBLE("LOW_POWER:ok:on");
@@ -655,6 +810,7 @@ void processBLECommand(String value) {
   }
 
   if (value == "LOW_POWER:OFF") {
+    lastActivityTime = millis();
     disableLowPower();
     broadcastViaBLE("LOW_POWER:ok:off");
     showCentred("Full power", "mode ON");
@@ -690,6 +846,13 @@ class MyServerCallbacks : public BLEServerCallbacks {
     bleBuffer       = "";
     Serial.println("[BLE] Connected");
     registerActivity();  // connection = activity
+
+    // Set the link speed for whichever power profile we are in. Safe to do
+    // here: the connection handle is already on the server when this fires, so
+    // there is no need for the two-argument overload that carries a peer
+    // address — that one belongs to the Bluedroid API, and this core's BLE
+    // library is built on NimBLE.
+    applyConnParams(lowPowerActive);
 
     for (int i = 0; i < 2; i++) {
       digitalWrite(LED_PIN, HIGH); delay(120);
@@ -872,7 +1035,6 @@ void setup() {
 
   // Start activity timer — full power on boot
   lastActivityTime = millis();
-  fullPowerUntil   = millis() + FULL_POWER_HOLD_MS;
 
   BLEDevice::init(BLE_NAME);
 
@@ -908,8 +1070,14 @@ void setup() {
 
   BLEAdvertising* pAdv = BLEDevice::getAdvertising();
   pAdv->setScanResponse(true);
+
+  // The connection parameters advertised as *preferred*. Android reads these
+  // when it first connects, and from then on the authority is
+  // applyConnParams() — a peripheral-initiated update, which is the only way
+  // to change the interval after the link is already up.
   pAdv->setMinPreferred(0x06);
   pAdv->setMaxPreferred(0x12);
+  applyAdvInterval(false);
 
   BLEAdvertisementData advData;
   advData.setFlags(0x06);
@@ -947,17 +1115,24 @@ void loop() {
   unsigned long now = millis();
 
   // ── POWER MANAGEMENT ──
-  if (!alertActive) {
-    if (!lowPowerActive && now > fullPowerUntil) {
-      // Full power window expired — check inactivity
-      if (now - lastActivityTime >= INACTIVITY_TIMEOUT_MS) {
-        Serial.println("[PM] 10min inactivity — entering low power");
-        showCentred("Low power", "mode");
-        delay(1000);
-        enableLowPower();
-        updateDisplay();
-      }
-    }
+  //
+  // Entering is allowed while the phone is connected — that is the whole point.
+  // The link is not dropped, only slowed: see applyConnParams().
+  if (!alertActive && !lowPowerActive &&
+      now - lastActivityTime >= INACTIVITY_TIMEOUT_MS) {
+    Serial.println("[PM] 10 min idle — entering low power");
+    showCentred("Low power", "mode");
+    delay(1000);
+    // Last, and with nothing drawn after it. enableLowPower() blanks the
+    // panel, so an updateDisplay() here would light it straight back up.
+    enableLowPower();
+  }
+
+  // The OLED lights for anything worth reading, then goes dark again. Only in
+  // low power — at full power the panel simply stays on.
+  if (lowPowerActive && !displayAsleep && !alertActive &&
+      now > displayLingerUntil) {
+    sleepDisplay();
   }
 
   // ── ALERT buzzer ──
@@ -1012,19 +1187,33 @@ void loop() {
   lastButtonState = reading;
 
   // ── Display cycle every 5 seconds ──
-  if (!alertActive &&
+  //
+  // Suppressed in low power. This is what keeps the panel dark: the drawing
+  // primitives light it on demand, so the only way to stay dark is to stop
+  // asking them to draw.
+  if (!alertActive && !lowPowerActive &&
       millis() - lastDisplayCycle > displayCycleInterval) {
     lastDisplayCycle = millis();
     displayMode = (displayMode + 1) % 2;
     updateDisplay();
   }
 
-  // ── Battery report every 30 seconds ──
-  if (deviceConnected && millis() - lastBatReport > 30000) {
+  // ── Battery report ──
+  //
+  // Every 30 s normally, every 5 min in low power. Each report is a notify,
+  // which means a radio event and an app wake-up; at a 500 ms connection
+  // interval, reporting twice a minute would undo a good part of what the slow
+  // interval just bought.
+  const unsigned long batReportGap = lowPowerActive ? 300000UL : 30000UL;
+  if (deviceConnected && millis() - lastBatReport > batReportGap) {
     lastBatReport = millis();
     int bat = cachedBatPercent >= 0 ? cachedBatPercent : 0;
     broadcastViaBLE("BAT:" + String(bat));
   }
 
-  delay(10);
+  // Idle delay. Arduino's delay() yields to the FreeRTOS idle task, which is
+  // what lets the radio's own modem sleep actually run between connection
+  // events. 10 ms while something is happening keeps the button responsive;
+  // 100 ms when idle in low power means a tenth of the wake-ups.
+  delay(lowPowerActive && !alertActive ? 100 : 10);
 }
